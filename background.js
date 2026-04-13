@@ -1,8 +1,6 @@
 const DEFAULT_SETTINGS = {
   dryRunMode: false,
-  devMode: false,
-  pinEnabled: false,
-  pinCode: ""
+  devMode: false
 };
 /** Packaged asset — Brave/Chromium reject data: URLs for notification icons ("Unable to download all specified images"). */
 const NOTIFICATION_ICON = chrome.runtime.getURL("icons/notification.png");

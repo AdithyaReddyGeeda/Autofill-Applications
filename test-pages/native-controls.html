@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test: Native Radio, Checkbox &amp; Text Inputs</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+  .field { margin-bottom: 22px; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 0.9rem; }
+  .hint { font-size: 0.78rem; color: #6b7280; margin-bottom: 4px; }
+  input[type="text"], input[type="email"], input[type="tel"], input[type="url"], input[type="number"], textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem;
+  }
+  textarea { resize: vertical; min-height: 70px; }
+  input:focus, textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  fieldset { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin: 0 0 22px 0; }
+  legend { font-weight: 600; font-size: 0.9rem; padding: 0 6px; }
+  .radio-row, .check-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 0.9rem; }
+  .radio-row label, .check-row label { font-weight: 400; margin-bottom: 0; }
+  #log { margin-top: 30px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.82rem; font-family: monospace; white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>Native Radio, Checkbox &amp; Text Inputs</h1>
+<p>Standard HTML form controls — the baseline that every autofill extension must handle correctly.</p>
+
+<form id="form">
+  <div class="field">
+    <label for="first_name">First Name</label>
+    <input type="text" id="first_name" name="first_name" placeholder="Jane">
+  </div>
+
+  <div class="field">
+    <label for="last_name">Last Name</label>
+    <input type="text" id="last_name" name="last_name" placeholder="Doe">
+  </div>
+
+  <div class="field">
+    <label for="email">Email Address</label>
+    <input type="email" id="email" name="email" placeholder="jane@example.com">
+  </div>
+
+  <div class="field">
+    <label for="phone">Phone Number</label>
+    <input type="tel" id="phone" name="phone" placeholder="(555) 123-4567">
+  </div>
+
+  <div class="field">
+    <label for="linkedin">LinkedIn Profile URL</label>
+    <input type="url" id="linkedin" name="linkedin" placeholder="https://linkedin.com/in/janedoe">
+  </div>
+
+  <div class="field">
+    <label for="years_experience">Years of Experience</label>
+    <input type="number" id="years_experience" name="years_experience" min="0" max="50" placeholder="3">
+  </div>
+
+  <div class="field">
+    <label for="location">Location</label>
+    <input type="text" id="location" name="location" placeholder="San Francisco, CA">
+  </div>
+
+  <!-- Native radio: gender -->
+  <fieldset>
+    <legend>Gender</legend>
+    <div class="hint">EEO field — native radio buttons.</div>
+    <div class="radio-row"><input type="radio" name="gender" id="gender-m" value="Male"><label for="gender-m">Male</label></div>
+    <div class="radio-row"><input type="radio" name="gender" id="gender-f" value="Female"><label for="gender-f">Female</label></div>
+    <div class="radio-row"><input type="radio" name="gender" id="gender-nb" value="Non-binary"><label for="gender-nb">Non-binary</label></div>
+    <div class="radio-row"><input type="radio" name="gender" id="gender-d" value="Decline to self-identify"><label for="gender-d">Prefer not to say</label></div>
+  </fieldset>
+
+  <!-- Native radio: visa sponsorship -->
+  <fieldset>
+    <legend>Do you require visa sponsorship?</legend>
+    <div class="radio-row"><input type="radio" name="requires_sponsorship" id="sponsor-y" value="Yes"><label for="sponsor-y">Yes</label></div>
+    <div class="radio-row"><input type="radio" name="requires_sponsorship" id="sponsor-n" value="No"><label for="sponsor-n">No</label></div>
+  </fieldset>
+
+  <!-- Native radio: work authorization -->
+  <fieldset>
+    <legend>Are you legally authorized to work in the United States?</legend>
+    <div class="radio-row"><input type="radio" name="work_authorization" id="auth-y" value="Yes"><label for="auth-y">Yes</label></div>
+    <div class="radio-row"><input type="radio" name="work_authorization" id="auth-n" value="No"><label for="auth-n">No</label></div>
+  </fieldset>
+
+  <!-- Native radio with a disabled option -->
+  <fieldset>
+    <legend>Restricted Radio Test</legend>
+    <div class="hint">One option is disabled — autofill must skip it.</div>
+    <div class="radio-row"><input type="radio" name="restricted_radio" id="rr-a" value="A" disabled><label for="rr-a">Option A (disabled)</label></div>
+    <div class="radio-row"><input type="radio" name="restricted_radio" id="rr-b" value="B"><label for="rr-b">Option B</label></div>
+    <div class="radio-row"><input type="radio" name="restricted_radio" id="rr-c" value="C"><label for="rr-c">Option C</label></div>
+  </fieldset>
+
+  <!-- Checkboxes -->
+  <div class="field">
+    <label>Agreements</label>
+    <div class="check-row"><input type="checkbox" id="agree_tos" name="agree_tos"><label for="agree_tos">I agree to the Terms of Service</label></div>
+    <div class="check-row"><input type="checkbox" id="agree_privacy" name="agree_privacy"><label for="agree_privacy">I agree to the Privacy Policy</label></div>
+    <div class="check-row"><input type="checkbox" id="work_authorized_cb" name="work_authorized"><label for="work_authorized_cb">I am authorized to work in the US</label></div>
+  </div>
+
+  <div class="field">
+    <label for="cover_letter">Cover Letter</label>
+    <textarea id="cover_letter" name="cover_letter" placeholder="Enter a brief cover letter..."></textarea>
+  </div>
+</form>
+
+<div id="log">Event log:
+</div>
+
+<script>
+  const log = document.getElementById("log");
+  function logEvent(msg) {
+    log.textContent += msg + "\n";
+    log.scrollTop = log.scrollHeight;
+  }
+
+  const form = document.getElementById("form");
+  form.addEventListener("input", (e) => {
+    const t = e.target;
+    if (t.type === "radio") logEvent(`input  → ${t.name}: "${t.value}" (checked=${t.checked})`);
+    else if (t.type === "checkbox") logEvent(`input  → ${t.name || t.id}: checked=${t.checked}`);
+    else logEvent(`input  → ${t.name || t.id}: "${t.value}"`);
+  });
+  form.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.type === "radio") logEvent(`change → ${t.name}: "${t.value}" (checked=${t.checked})`);
+    else if (t.type === "checkbox") logEvent(`change → ${t.name || t.id}: checked=${t.checked}`);
+    else logEvent(`change → ${t.name || t.id}: "${t.value}"`);
+  });
+</script>
+</body>
+</html>

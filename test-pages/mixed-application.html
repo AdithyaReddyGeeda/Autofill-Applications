@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test: Mixed Job Application Form</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+  h2 { font-size: 1.1rem; margin-top: 36px; margin-bottom: 12px; color: #374151; }
+  .field { margin-bottom: 20px; position: relative; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 0.9rem; }
+  .hint { font-size: 0.78rem; color: #6b7280; margin-bottom: 4px; }
+  input[type="text"], input[type="email"], input[type="tel"], input[type="url"], input[type="number"], textarea, select {
+    width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem;
+  }
+  textarea { resize: vertical; min-height: 80px; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+
+  fieldset { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin: 0 0 20px 0; }
+  legend { font-weight: 600; font-size: 0.9rem; padding: 0 6px; }
+  .radio-row, .check-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 0.9rem; }
+  .radio-row label, .check-row label { font-weight: 400; margin-bottom: 0; }
+
+  /* ARIA combobox */
+  .combo-trigger {
+    width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px;
+    font-size: 0.95rem; background: #fff; cursor: pointer; text-align: left;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .combo-trigger:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  .combo-trigger::after { content: "▾"; margin-left: 8px; color: #9ca3af; }
+  .combo-trigger[aria-expanded="true"]::after { content: "▴"; }
+
+  .combo-list {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px;
+    background: #fff; border: 1px solid #d1d5db; border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.1); z-index: 10; max-height: 200px; overflow-y: auto;
+    list-style: none; padding: 4px 0; margin: 0;
+  }
+  .combo-list.open { display: block; }
+  .combo-list [role="option"] { padding: 8px 12px; cursor: pointer; font-size: 0.9rem; }
+  .combo-list [role="option"]:hover { background: #eff6ff; color: #1d4ed8; }
+  .combo-list [role="option"][aria-selected="true"] { background: #eff6ff; color: #1d4ed8; font-weight: 600; }
+
+  /* ARIA radio group */
+  .aria-radios { display: flex; flex-direction: column; gap: 6px; }
+  .aria-radio-opt {
+    padding: 8px 14px; border: 1px solid #d1d5db; border-radius: 6px;
+    cursor: pointer; font-size: 0.9rem; transition: all .15s;
+  }
+  .aria-radio-opt:hover { border-color: #3b82f6; }
+  .aria-radio-opt:focus { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  .aria-radio-opt[aria-checked="true"] { background: #eff6ff; border-color: #3b82f6; color: #1d4ed8; font-weight: 600; }
+
+  .section-divider { border: none; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+
+  #log { margin-top: 30px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.82rem; font-family: monospace; white-space: pre-wrap; max-height: 280px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>Mixed Job Application Form</h1>
+<p>A realistic multi-section form combining text inputs, native selects, native radios, ARIA comboboxes, and ARIA radio groups — the kind of form the extension encounters on real job portals.</p>
+
+<form id="form">
+  <!-- ─── Section 1: Personal Info (text inputs) ─── -->
+  <h2>Personal Information</h2>
+
+  <div class="field">
+    <label for="first_name">First Name</label>
+    <input type="text" id="first_name" name="first_name" placeholder="Jane">
+  </div>
+  <div class="field">
+    <label for="last_name">Last Name</label>
+    <input type="text" id="last_name" name="last_name" placeholder="Doe">
+  </div>
+  <div class="field">
+    <label for="email">Email Address</label>
+    <input type="email" id="email" name="email" placeholder="jane@example.com">
+  </div>
+  <div class="field">
+    <label for="phone">Phone Number</label>
+    <input type="tel" id="phone" name="phone" placeholder="(555) 123-4567">
+  </div>
+  <div class="field">
+    <label for="linkedin">LinkedIn URL</label>
+    <input type="url" id="linkedin" name="linkedin" placeholder="https://linkedin.com/in/janedoe">
+  </div>
+  <div class="field">
+    <label for="location">Location</label>
+    <input type="text" id="location" name="location" placeholder="San Francisco, CA">
+  </div>
+
+  <hr class="section-divider">
+
+  <!-- ─── Section 2: Job Details (native selects) ─── -->
+  <h2>Job Details</h2>
+
+  <div class="field">
+    <label for="country">Country</label>
+    <select id="country" name="country">
+      <option value="">Select a country</option>
+      <option value="US">United States</option>
+      <option value="CA">Canada</option>
+      <option value="GB">United Kingdom</option>
+      <option value="DE">Germany</option>
+      <option value="IN">India</option>
+      <option value="AU">Australia</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="experience">Years of Experience</label>
+    <select id="experience" name="years_experience">
+      <option value="">Select...</option>
+      <option value="0">Less than 1 year</option>
+      <option value="1">1 year</option>
+      <option value="2">2 years</option>
+      <option value="3">3 years</option>
+      <option value="5">5+ years</option>
+      <option value="10">10+ years</option>
+    </select>
+  </div>
+
+  <!-- ─── Native radio: sponsorship ─── -->
+  <fieldset>
+    <legend>Do you require visa sponsorship?</legend>
+    <div class="radio-row"><input type="radio" name="requires_sponsorship" id="sponsor-y" value="Yes"><label for="sponsor-y">Yes</label></div>
+    <div class="radio-row"><input type="radio" name="requires_sponsorship" id="sponsor-n" value="No"><label for="sponsor-n">No</label></div>
+  </fieldset>
+
+  <!-- ─── Native radio: work authorization ─── -->
+  <fieldset>
+    <legend>Are you legally authorized to work in the United States?</legend>
+    <div class="radio-row"><input type="radio" name="work_authorization" id="auth-y" value="Yes"><label for="auth-y">Yes</label></div>
+    <div class="radio-row"><input type="radio" name="work_authorization" id="auth-n" value="No"><label for="auth-n">No</label></div>
+  </fieldset>
+
+  <hr class="section-divider">
+
+  <!-- ─── Section 3: EEO — ARIA combobox + ARIA radio ─── -->
+  <h2>Voluntary Self-Identification (EEO)</h2>
+
+  <!-- ARIA combobox: Gender -->
+  <div class="field" id="gender-field">
+    <label id="gender-label">Gender</label>
+    <button type="button" class="combo-trigger"
+            role="combobox" aria-haspopup="listbox" aria-expanded="false"
+            aria-labelledby="gender-label" aria-controls="gender-listbox"
+            id="gender-trigger">
+      <span class="combo-value">Select...</span>
+    </button>
+    <ul role="listbox" id="gender-listbox" class="combo-list" aria-labelledby="gender-label">
+      <li role="option" data-value="male">Male</li>
+      <li role="option" data-value="female">Female</li>
+      <li role="option" data-value="nonbinary">Non-binary</li>
+      <li role="option" data-value="decline">Prefer not to say</li>
+    </ul>
+  </div>
+
+  <!-- ARIA combobox: Race / Ethnicity -->
+  <div class="field" id="race-field">
+    <label id="race-label">Race / Ethnicity</label>
+    <button type="button" class="combo-trigger"
+            role="combobox" aria-haspopup="listbox" aria-expanded="false"
+            aria-labelledby="race-label" aria-controls="race-listbox"
+            id="race-trigger">
+      <span class="combo-value">Select...</span>
+    </button>
+    <ul role="listbox" id="race-listbox" class="combo-list" aria-labelledby="race-label">
+      <li role="option" data-value="hispanic">Hispanic or Latino</li>
+      <li role="option" data-value="white">White (Not Hispanic or Latino)</li>
+      <li role="option" data-value="black">Black or African American</li>
+      <li role="option" data-value="asian">Asian</li>
+      <li role="option" data-value="native">American Indian or Alaska Native</li>
+      <li role="option" data-value="pacific">Native Hawaiian or Other Pacific Islander</li>
+      <li role="option" data-value="two">Two or More Races</li>
+      <li role="option" data-value="decline">Decline to self-identify</li>
+    </ul>
+  </div>
+
+  <!-- ARIA radio group: Veteran Status -->
+  <div class="field">
+    <label id="veteran-label">Veteran Status</label>
+    <div role="radiogroup" aria-labelledby="veteran-label" id="veteran-group" class="aria-radios">
+      <div role="radio" tabindex="0" aria-checked="false" data-value="not_veteran" class="aria-radio-opt">I am not a protected veteran</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="veteran" class="aria-radio-opt">I identify as one or more of the classifications of a protected veteran</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="decline" class="aria-radio-opt">I don't wish to answer</div>
+    </div>
+  </div>
+
+  <!-- ARIA radio group: Disability Status -->
+  <div class="field">
+    <label id="disability-label">Disability Status</label>
+    <div role="radiogroup" aria-labelledby="disability-label" id="disability-group" class="aria-radios">
+      <div role="radio" tabindex="0" aria-checked="false" data-value="yes" class="aria-radio-opt">Yes, I have a disability (or previously had a disability)</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="no" class="aria-radio-opt">No, I don't have a disability</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="decline" class="aria-radio-opt">I don't wish to answer</div>
+    </div>
+  </div>
+
+  <hr class="section-divider">
+
+  <!-- ─── Section 4: Checkboxes + Textarea ─── -->
+  <h2>Additional</h2>
+
+  <div class="field">
+    <label for="cover_letter">Cover Letter</label>
+    <textarea id="cover_letter" name="cover_letter" placeholder="Tell us why you're interested in this role..."></textarea>
+  </div>
+
+  <div class="field">
+    <div class="check-row"><input type="checkbox" id="agree_tos" name="agree_tos"><label for="agree_tos">I agree to the Terms of Service</label></div>
+    <div class="check-row"><input type="checkbox" id="agree_privacy" name="agree_privacy"><label for="agree_privacy">I agree to the Privacy Policy</label></div>
+  </div>
+</form>
+
+<div id="log">Event log:
+</div>
+
+<script>
+  const log = document.getElementById("log");
+  function logEvent(msg) {
+    log.textContent += msg + "\n";
+    log.scrollTop = log.scrollHeight;
+  }
+
+  // ARIA combobox wiring
+  document.querySelectorAll(".combo-trigger").forEach((trigger) => {
+    const listbox = document.getElementById(trigger.getAttribute("aria-controls"));
+    if (!listbox) return;
+
+    trigger.addEventListener("click", () => {
+      const open = trigger.getAttribute("aria-expanded") === "true";
+      trigger.setAttribute("aria-expanded", String(!open));
+      listbox.classList.toggle("open", !open);
+    });
+
+    listbox.querySelectorAll('[role="option"]').forEach((opt) => {
+      opt.addEventListener("click", () => {
+        listbox.querySelectorAll('[role="option"]').forEach((o) => o.removeAttribute("aria-selected"));
+        opt.setAttribute("aria-selected", "true");
+        trigger.querySelector(".combo-value").textContent = opt.textContent;
+        trigger.setAttribute("aria-expanded", "false");
+        listbox.classList.remove("open");
+        logEvent(`combobox → ${trigger.id}: "${opt.textContent}" (value="${opt.dataset.value}")`);
+      });
+    });
+  });
+
+  // Close comboboxes on outside click
+  document.addEventListener("click", (e) => {
+    document.querySelectorAll(".combo-trigger[aria-expanded='true']").forEach((t) => {
+      if (!t.parentElement.contains(e.target)) {
+        t.setAttribute("aria-expanded", "false");
+        const lb = document.getElementById(t.getAttribute("aria-controls"));
+        if (lb) lb.classList.remove("open");
+      }
+    });
+  });
+
+  // ARIA radio groups
+  document.querySelectorAll('[role="radiogroup"]').forEach((rg) => {
+    rg.querySelectorAll('[role="radio"]').forEach((radio) => {
+      radio.addEventListener("click", () => {
+        rg.querySelectorAll('[role="radio"]').forEach((r) => r.setAttribute("aria-checked", "false"));
+        radio.setAttribute("aria-checked", "true");
+        logEvent(`radio → ${rg.id}: "${radio.textContent.trim().slice(0, 60)}" (value="${radio.dataset.value}")`);
+      });
+    });
+  });
+
+  // Native form event logging
+  const form = document.getElementById("form");
+  form.addEventListener("input", (e) => {
+    const t = e.target;
+    if (t.type === "radio") logEvent(`input  → ${t.name}: "${t.value}"`);
+    else if (t.type === "checkbox") logEvent(`input  → ${t.id}: checked=${t.checked}`);
+    else logEvent(`input  → ${t.name || t.id}: "${t.value}"`);
+  });
+  form.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.type === "radio") logEvent(`change → ${t.name}: "${t.value}"`);
+    else if (t.type === "checkbox") logEvent(`change → ${t.id}: checked=${t.checked}`);
+    else if (t.tagName === "SELECT") logEvent(`change → ${t.name}: "${t.options[t.selectedIndex]?.text}" (value="${t.value}")`);
+    else logEvent(`change → ${t.name || t.id}: "${t.value}"`);
+  });
+</script>
+</body>
+</html>

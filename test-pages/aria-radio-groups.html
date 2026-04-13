@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test: ARIA Custom Radio Groups</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+  .field { margin-bottom: 28px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.9rem; }
+  .hint { font-size: 0.78rem; color: #6b7280; margin-bottom: 6px; }
+
+  /* Pill-style radio (Ashby / Radix) */
+  .radio-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+  .radio-pill {
+    padding: 8px 16px; border: 1px solid #d1d5db; border-radius: 20px;
+    cursor: pointer; font-size: 0.88rem; user-select: none; transition: all .15s;
+  }
+  .radio-pill:hover { border-color: #3b82f6; }
+  .radio-pill:focus { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  .radio-pill[aria-checked="true"] { background: #3b82f6; border-color: #3b82f6; color: #fff; font-weight: 600; }
+  .radio-pill[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+
+  /* Card-style radio (Greenhouse) */
+  .radio-cards { display: flex; flex-direction: column; gap: 6px; }
+  .radio-card {
+    padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 8px;
+    cursor: pointer; font-size: 0.9rem; transition: all .15s;
+  }
+  .radio-card:hover { border-color: #3b82f6; }
+  .radio-card:focus { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  .radio-card[aria-checked="true"] { background: #eff6ff; border-color: #3b82f6; color: #1d4ed8; font-weight: 600; }
+
+  /* Inline button-style radio (Lever) */
+  .radio-inline { display: flex; gap: 0; }
+  .radio-seg {
+    padding: 8px 18px; border: 1px solid #d1d5db;
+    cursor: pointer; font-size: 0.88rem; transition: all .12s; user-select: none;
+  }
+  .radio-seg:first-child { border-radius: 6px 0 0 6px; }
+  .radio-seg:last-child { border-radius: 0 6px 6px 0; }
+  .radio-seg:not(:first-child) { border-left: none; }
+  .radio-seg:focus { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.15); z-index: 1; position: relative; }
+  .radio-seg[aria-checked="true"] { background: #3b82f6; border-color: #3b82f6; color: #fff; font-weight: 600; }
+
+  /* Status badge for results */
+  .result-badge { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+  .result-badge.filled { background: #dcfce7; color: #166534; }
+  .result-badge.empty { background: #fef3c7; color: #92400e; }
+
+  #log { margin-top: 30px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.82rem; font-family: monospace; white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>ARIA Custom Radio Groups</h1>
+<p>Three visual styles of <code>role="radiogroup"</code> + <code>role="radio"</code>, matching patterns from Ashby, Greenhouse, and Lever. The extension must click the correct <code>[role="radio"]</code> and set <code>aria-checked="true"</code>.</p>
+
+<form id="form">
+  <!-- Pill-style: Gender (EEO) -->
+  <div class="field">
+    <label id="gender-label">Gender <span class="result-badge empty" id="gender-badge">not set</span></label>
+    <div class="hint">EEO field — pill-style radio (Ashby / Radix pattern).</div>
+    <div role="radiogroup" aria-labelledby="gender-label" id="gender-group" class="radio-pills">
+      <div role="radio" tabindex="0" aria-checked="false" data-value="male" class="radio-pill">Male</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="female" class="radio-pill">Female</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="nonbinary" class="radio-pill">Non-binary</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="decline" class="radio-pill">Prefer not to say</div>
+    </div>
+  </div>
+
+  <!-- Card-style: Veteran Status (EEO) -->
+  <div class="field">
+    <label id="veteran-label">Veteran Status <span class="result-badge empty" id="veteran-badge">not set</span></label>
+    <div class="hint">EEO field — card-style radio (Greenhouse pattern).</div>
+    <div role="radiogroup" aria-labelledby="veteran-label" id="veteran-group" class="radio-cards">
+      <div role="radio" tabindex="0" aria-checked="false" data-value="not_veteran" class="radio-card">I am not a protected veteran</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="veteran" class="radio-card">I identify as one or more of the classifications of a protected veteran</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="decline" class="radio-card">I don't wish to answer</div>
+    </div>
+  </div>
+
+  <!-- Card-style: Disability (EEO) -->
+  <div class="field">
+    <label id="disability-label">Disability Status <span class="result-badge empty" id="disability-badge">not set</span></label>
+    <div class="hint">EEO field — card-style radio.</div>
+    <div role="radiogroup" aria-labelledby="disability-label" id="disability-group" class="radio-cards">
+      <div role="radio" tabindex="0" aria-checked="false" data-value="yes" class="radio-card">Yes, I have a disability (or previously had a disability)</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="no" class="radio-card">No, I don't have a disability</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="decline" class="radio-card">I don't wish to answer</div>
+    </div>
+  </div>
+
+  <!-- Inline segment: Visa Sponsorship -->
+  <div class="field">
+    <label id="sponsorship-label">Do you require visa sponsorship? <span class="result-badge empty" id="sponsorship-badge">not set</span></label>
+    <div class="hint">Yes/No radio — segmented button style (Lever pattern).</div>
+    <div role="radiogroup" aria-labelledby="sponsorship-label" id="sponsorship-group" class="radio-inline">
+      <div role="radio" tabindex="0" aria-checked="false" data-value="yes" class="radio-seg">Yes</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="no" class="radio-seg">No</div>
+    </div>
+  </div>
+
+  <!-- Inline segment: Work Authorization -->
+  <div class="field">
+    <label id="auth-label">Are you authorized to work in the United States? <span class="result-badge empty" id="auth-badge">not set</span></label>
+    <div role="radiogroup" aria-labelledby="auth-label" id="auth-group" class="radio-inline">
+      <div role="radio" tabindex="0" aria-checked="false" data-value="yes" class="radio-seg">Yes</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="no" class="radio-seg">No</div>
+    </div>
+  </div>
+
+  <!-- Pill-style with disabled option -->
+  <div class="field">
+    <label id="restricted-label">Restricted Test <span class="result-badge empty" id="restricted-badge">not set</span></label>
+    <div class="hint">One option is disabled — autofill must skip it.</div>
+    <div role="radiogroup" aria-labelledby="restricted-label" id="restricted-group" class="radio-pills">
+      <div role="radio" tabindex="0" aria-checked="false" aria-disabled="true" data-value="a" class="radio-pill">Alpha (disabled)</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="b" class="radio-pill">Bravo</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="c" class="radio-pill">Charlie</div>
+    </div>
+  </div>
+</form>
+
+<div id="log">Event log:
+</div>
+
+<script>
+  const log = document.getElementById("log");
+  function logEvent(msg) {
+    log.textContent += msg + "\n";
+    log.scrollTop = log.scrollHeight;
+  }
+
+  document.querySelectorAll('[role="radiogroup"]').forEach((rg) => {
+    const badgeId = rg.id.replace("-group", "-badge");
+    const badge = document.getElementById(badgeId);
+
+    rg.querySelectorAll('[role="radio"]').forEach((radio) => {
+      radio.addEventListener("click", () => {
+        if (radio.getAttribute("aria-disabled") === "true") return;
+        rg.querySelectorAll('[role="radio"]').forEach((r) => r.setAttribute("aria-checked", "false"));
+        radio.setAttribute("aria-checked", "true");
+        if (badge) {
+          badge.textContent = radio.textContent.trim().slice(0, 40);
+          badge.className = "result-badge filled";
+        }
+        logEvent(`radio → ${rg.id}: "${radio.textContent.trim().slice(0, 60)}" (value="${radio.dataset.value}")`);
+      });
+    });
+  });
+</script>
+</body>
+</html>

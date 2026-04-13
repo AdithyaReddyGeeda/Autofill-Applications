@@ -1,11 +1,29 @@
 (() => {
   const statusText = document.getElementById("statusText");
-  const pinGate = document.getElementById("pinGate");
-  const appContent = document.getElementById("appContent");
-  const pinInput = document.getElementById("pinInput");
   const activeResumeSelect = document.getElementById("activeResumeSelect");
   const historyList = document.getElementById("historyList");
   const reportsList = document.getElementById("reportsList");
+
+  function createEl(tag, attrs, ...children) {
+    const el = document.createElement(tag);
+    if (typeof attrs === "string") { el.className = attrs; }
+    else if (attrs) {
+      for (const [k, v] of Object.entries(attrs)) {
+        if (k === "text") el.textContent = v;
+        else if (k === "style") Object.assign(el.style, v);
+        else el.setAttribute(k, v);
+      }
+    }
+    for (const child of children) {
+      if (typeof child === "string") el.appendChild(document.createTextNode(child));
+      else if (child) el.appendChild(child);
+    }
+    return el;
+  }
+
+  function clearAndAppend(container, nodes) {
+    container.replaceChildren(...nodes);
+  }
 
   function setStatus(text, isError = false) {
     statusText.textContent = text;
@@ -16,30 +34,18 @@
     return new Promise((resolve) => chrome.runtime.sendMessage(message, resolve));
   }
 
-  async function checkPinGate() {
-    const response = await sendMessage({ type: "getSettings" });
-    const settings = response?.settings || {};
-    if (settings.pinEnabled && settings.pinCode) {
-      pinGate.classList.remove("hidden");
-      appContent.classList.add("hidden");
-    } else {
-      pinGate.classList.add("hidden");
-      appContent.classList.remove("hidden");
-    }
-  }
-
   async function loadResumeOptions() {
     const result = await new Promise((resolve) => chrome.storage.local.get(["resumes", "settings"], resolve));
     const resumes = result.resumes || [];
     const settings = result.settings || {};
-    activeResumeSelect.innerHTML = '<option value="">Use profile defaults</option>';
-    resumes.forEach((resume) => {
-      const option = document.createElement("option");
-      option.value = resume.id;
-      option.textContent = `${resume.name}${resume.roleTag ? ` (${resume.roleTag})` : ""}`;
-      if (settings.activeResumeId === resume.id) option.selected = true;
-      activeResumeSelect.appendChild(option);
+    const defaultOpt = createEl("option", { value: "", text: "Use profile defaults" });
+    const resumeOpts = resumes.map((resume) => {
+      const opt = createEl("option", { value: resume.id });
+      opt.textContent = `${resume.name}${resume.roleTag ? ` (${resume.roleTag})` : ""}`;
+      if (settings.activeResumeId === resume.id) opt.selected = true;
+      return opt;
     });
+    clearAndAppend(activeResumeSelect, [defaultOpt, ...resumeOpts]);
   }
 
   async function saveActiveResumeId() {
@@ -56,12 +62,11 @@
       historyList.textContent = "No fill history yet.";
       return;
     }
-    historyList.innerHTML = history
-      .map((entry) => {
-        const date = new Date(entry.timestamp).toLocaleString();
-        return `<div>${entry.hostname} - ${date} - ${entry.filledCount} fields</div>`;
-      })
-      .join("");
+    const historyNodes = history.map((entry) => {
+      const date = new Date(entry.timestamp).toLocaleString();
+      return createEl("div", null, `${entry.hostname} - ${date} - ${entry.filledCount} fields`);
+    });
+    clearAndAppend(historyList, historyNodes);
   }
 
   async function loadReports() {
@@ -71,32 +76,19 @@
       reportsList.textContent = "No site reports yet.";
       return;
     }
-    reportsList.innerHTML = reports
-      .map((entry) => {
-        const date = new Date(entry.createdAt).toLocaleString();
-        const host = entry.host || "unknown";
-        const count = Array.isArray(entry.fields) ? entry.fields.length : 0;
-        return `<div>${host} - ${date} - ${count} fields</div>`;
-      })
-      .join("");
+    const reportNodes = reports.map((entry) => {
+      const date = new Date(entry.createdAt).toLocaleString();
+      const host = entry.host || "unknown";
+      const count = Array.isArray(entry.fields) ? entry.fields.length : 0;
+      return createEl("div", null, `${host} - ${date} - ${count} fields`);
+    });
+    clearAndAppend(reportsList, reportNodes);
   }
 
   async function clearReports() {
     await new Promise((resolve) => chrome.storage.local.remove(["layoutReports"], resolve));
     await loadReports();
     setStatus("Site reports cleared.");
-  }
-
-  async function unlock() {
-    const response = await sendMessage({ type: "getSettings" });
-    const settings = response?.settings || {};
-    if (pinInput.value === settings.pinCode) {
-      pinGate.classList.add("hidden");
-      appContent.classList.remove("hidden");
-      setStatus("Unlocked.");
-    } else {
-      setStatus("Invalid PIN.", true);
-    }
   }
 
   async function actionFill(dryRun) {
@@ -163,7 +155,6 @@
     });
   }
 
-  document.getElementById("unlockBtn").addEventListener("click", unlock);
   document.getElementById("fillNowBtn").addEventListener("click", () => actionFill(false));
   document.getElementById("dryRunBtn").addEventListener("click", () => actionFill(true));
   document.getElementById("undoBtn").addEventListener("click", actionUndo);
@@ -172,7 +163,6 @@
   document.getElementById("clearReportsBtn").addEventListener("click", clearReports);
   activeResumeSelect.addEventListener("change", saveActiveResumeId);
 
-  checkPinGate();
   loadResumeOptions();
   loadHistory();
   loadReports();

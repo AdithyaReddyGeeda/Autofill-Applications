@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test: Workday-Style Dropdowns</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+  .field { margin-bottom: 24px; position: relative; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 0.9rem; }
+  .hint { font-size: 0.78rem; color: #6b7280; margin-bottom: 4px; }
+
+  /* Workday "selectWidget" trigger */
+  .wd-select {
+    width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 4px;
+    font-size: 0.95rem; background: #fff; cursor: pointer; text-align: left;
+    display: flex; justify-content: space-between; align-items: center;
+    min-height: 38px;
+  }
+  .wd-select:focus { outline: none; border-color: #0875e1; box-shadow: 0 0 0 2px rgba(8,117,225,.2); }
+  .wd-select .wd-chevron { font-size: 0.7rem; color: #6b7280; }
+
+  /* Workday popup */
+  .wd-popup {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 2px;
+    background: #fff; border: 1px solid #d1d5db; border-radius: 4px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.12); z-index: 20; max-height: 220px; overflow-y: auto;
+    padding: 0; list-style: none; margin: 0;
+  }
+  .wd-popup.open { display: block; }
+  .wd-popup [role="option"] {
+    padding: 8px 12px; cursor: pointer; font-size: 0.9rem;
+  }
+  .wd-popup [role="option"]:hover { background: #e8f0fe; }
+  .wd-popup [role="option"][aria-selected="true"] { background: #e8f0fe; font-weight: 600; }
+
+  /* Workday selected items chip area */
+  .wd-selected-items { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .wd-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; background: #e8f0fe; border-radius: 3px; font-size: 0.8rem; color: #1a56db;
+  }
+
+  /* Workday combobox input */
+  .wd-combo-input {
+    width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 4px;
+    font-size: 0.95rem;
+  }
+  .wd-combo-input:focus { outline: none; border-color: #0875e1; box-shadow: 0 0 0 2px rgba(8,117,225,.2); }
+
+  input[type="text"] {
+    width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem;
+  }
+  input[type="text"]:focus { outline: none; border-color: #0875e1; box-shadow: 0 0 0 2px rgba(8,117,225,.2); }
+
+  #log { margin-top: 30px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.82rem; font-family: monospace; white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>Workday-Style Dropdowns</h1>
+<p>Simulates Workday's custom dropdown structure using <code>data-automation-id</code> attributes, <code>[role="listbox"]</code> popups, and <code>promptOption</code> items. The extension's Workday-specific handler should match these selectors.</p>
+
+<form id="form">
+  <div class="field">
+    <label for="wd-name">Legal Name</label>
+    <input type="text" id="wd-name" name="full_name" data-automation-id="legalNameSection_firstName" placeholder="First name">
+  </div>
+
+  <!-- Workday selectWidget: Country -->
+  <div class="field" id="country-field">
+    <label id="country-label">Country</label>
+    <div class="hint">Uses <code>data-automation-id="selectWidget"</code> trigger.</div>
+    <button type="button" class="wd-select"
+            data-automation-id="selectWidget"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="country-label"
+            id="country-trigger">
+      <span class="wd-value">Select Country</span>
+      <span class="wd-chevron">▼</span>
+    </button>
+    <ul role="listbox" class="wd-popup" id="country-popup" data-automation-activepopup="false">
+      <li role="option" data-automation-id="promptOption" data-automation-label="United States">United States</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Canada">Canada</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="United Kingdom">United Kingdom</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Germany">Germany</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="India">India</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Australia">Australia</li>
+    </ul>
+  </div>
+
+  <!-- Workday selectWidget: Gender (EEO) -->
+  <div class="field" id="gender-field">
+    <label id="gender-label">Gender</label>
+    <div class="hint">EEO field — <code>data-automation-id="selectWidget"</code>.</div>
+    <button type="button" class="wd-select"
+            data-automation-id="selectWidget"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="gender-label"
+            id="gender-trigger">
+      <span class="wd-value">Please Select</span>
+      <span class="wd-chevron">▼</span>
+    </button>
+    <ul role="listbox" class="wd-popup" id="gender-popup" data-automation-activepopup="false">
+      <li role="option" data-automation-id="promptOption" data-automation-label="Male">Male</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Female">Female</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Non-Binary">Non-Binary</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Decline to Self-Identify">Decline to Self-Identify</li>
+    </ul>
+  </div>
+
+  <!-- Workday selectWidget: Veteran Status (EEO) -->
+  <div class="field" id="veteran-field">
+    <label id="veteran-label">Veteran Status</label>
+    <div class="hint">EEO — uses <code>promptLeafNode</code> items inside options.</div>
+    <button type="button" class="wd-select"
+            data-automation-id="selectWidget"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="veteran-label"
+            id="veteran-trigger">
+      <span class="wd-value">Please Select</span>
+      <span class="wd-chevron">▼</span>
+    </button>
+    <ul role="listbox" class="wd-popup" id="veteran-popup" data-automation-activepopup="false">
+      <li role="option"><span data-automation-id="promptLeafNode">I am not a protected veteran</span></li>
+      <li role="option"><span data-automation-id="promptLeafNode">I identify as one or more of the classifications of a protected veteran</span></li>
+      <li role="option"><span data-automation-id="promptLeafNode">I don't wish to answer</span></li>
+    </ul>
+  </div>
+
+  <!-- Workday selectWidget: Race / Ethnicity (EEO) -->
+  <div class="field" id="race-field">
+    <label id="race-label">Race / Ethnicity</label>
+    <div class="hint">EEO — <code>menuItem</code> styled options.</div>
+    <button type="button" class="wd-select"
+            data-automation-id="selectWidget"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="race-label"
+            id="race-trigger">
+      <span class="wd-value">Please Select</span>
+      <span class="wd-chevron">▼</span>
+    </button>
+    <ul role="listbox" class="wd-popup" id="race-popup" data-automation-activepopup="false">
+      <li role="option" data-automation-id="menuItem">Hispanic or Latino</li>
+      <li role="option" data-automation-id="menuItem">White (Not Hispanic or Latino)</li>
+      <li role="option" data-automation-id="menuItem">Black or African American</li>
+      <li role="option" data-automation-id="menuItem">Asian</li>
+      <li role="option" data-automation-id="menuItem">American Indian or Alaska Native</li>
+      <li role="option" data-automation-id="menuItem">Native Hawaiian or Other Pacific Islander</li>
+      <li role="option" data-automation-id="menuItem">Two or More Races</li>
+      <li role="option" data-automation-id="menuItem">Decline to Self-Identify</li>
+    </ul>
+  </div>
+
+  <!-- Workday combobox input: Job Title / Role search -->
+  <div class="field" id="jobtitle-field">
+    <label for="jobtitle-input">How did you hear about us?</label>
+    <div class="hint">Combobox input with <code>role="combobox"</code> + <code>data-automation-id</code> containing "dropdown".</div>
+    <input type="text" class="wd-combo-input"
+           id="jobtitle-input"
+           role="combobox"
+           data-automation-id="searchDropdown"
+           aria-haspopup="listbox"
+           aria-expanded="false"
+           aria-controls="jobtitle-popup"
+           autocomplete="off"
+           placeholder="Type to search...">
+    <ul role="listbox" class="wd-popup" id="jobtitle-popup" data-automation-activepopup="false">
+      <li role="option" data-automation-id="promptOption" data-automation-label="LinkedIn">LinkedIn</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Indeed">Indeed</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Company Website">Company Website</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Employee Referral">Employee Referral</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="University / Career Fair">University / Career Fair</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Other">Other</li>
+    </ul>
+  </div>
+
+  <!-- Workday selected-items pattern (already-picked chip that should be excluded) -->
+  <div class="field" id="skills-field">
+    <label id="skills-label">Skills (pre-selected)</label>
+    <div class="hint">The "JavaScript" chip below is wrapped in <code>data-automation-id="selectedItem"</code> — the extension should not re-select it.</div>
+    <div data-automation-id="selectedItem" class="wd-selected-items">
+      <span class="wd-chip">JavaScript ✕</span>
+    </div>
+    <button type="button" class="wd-select"
+            data-automation-id="selectWidget"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="skills-label"
+            id="skills-trigger">
+      <span class="wd-value">Add more…</span>
+      <span class="wd-chevron">▼</span>
+    </button>
+    <ul role="listbox" class="wd-popup" id="skills-popup" data-automation-activepopup="false">
+      <li role="option" data-automation-id="promptOption" data-automation-label="JavaScript">JavaScript</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="Python">Python</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="TypeScript">TypeScript</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="React">React</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="SQL">SQL</li>
+    </ul>
+  </div>
+</form>
+
+<div id="log">Event log:
+</div>
+
+<script>
+  const log = document.getElementById("log");
+  function logEvent(msg) {
+    log.textContent += msg + "\n";
+    log.scrollTop = log.scrollHeight;
+  }
+
+  // Wire all selectWidget triggers
+  document.querySelectorAll('[data-automation-id="selectWidget"]').forEach((trigger) => {
+    const popup = trigger.nextElementSibling;
+    if (!popup || popup.getAttribute("role") !== "listbox") return;
+
+    trigger.addEventListener("click", () => {
+      const isOpen = trigger.getAttribute("aria-expanded") === "true";
+      closeAllPopups();
+      if (!isOpen) {
+        trigger.setAttribute("aria-expanded", "true");
+        popup.classList.add("open");
+        popup.setAttribute("data-automation-activepopup", "true");
+      }
+    });
+
+    popup.querySelectorAll('[role="option"]').forEach((opt) => {
+      opt.addEventListener("click", () => {
+        popup.querySelectorAll('[role="option"]').forEach((o) => o.removeAttribute("aria-selected"));
+        opt.setAttribute("aria-selected", "true");
+        const label = opt.getAttribute("data-automation-label") || opt.textContent.trim();
+        trigger.querySelector(".wd-value").textContent = label;
+        trigger.setAttribute("aria-expanded", "false");
+        popup.classList.remove("open");
+        popup.setAttribute("data-automation-activepopup", "false");
+        logEvent(`selectWidget → ${trigger.id}: "${label}"`);
+      });
+    });
+  });
+
+  // Wire combobox input
+  const comboInput = document.getElementById("jobtitle-input");
+  const comboPopup = document.getElementById("jobtitle-popup");
+  if (comboInput && comboPopup) {
+    comboInput.addEventListener("focus", () => {
+      comboInput.setAttribute("aria-expanded", "true");
+      comboPopup.classList.add("open");
+      comboPopup.setAttribute("data-automation-activepopup", "true");
+    });
+    comboInput.addEventListener("input", () => {
+      const q = comboInput.value.toLowerCase();
+      comboPopup.querySelectorAll('[role="option"]').forEach((opt) => {
+        const text = (opt.getAttribute("data-automation-label") || opt.textContent).toLowerCase();
+        opt.style.display = text.includes(q) ? "" : "none";
+      });
+    });
+    comboPopup.querySelectorAll('[role="option"]').forEach((opt) => {
+      opt.addEventListener("click", () => {
+        const label = opt.getAttribute("data-automation-label") || opt.textContent.trim();
+        comboInput.value = label;
+        comboInput.setAttribute("aria-expanded", "false");
+        comboPopup.classList.remove("open");
+        comboPopup.setAttribute("data-automation-activepopup", "false");
+        logEvent(`combobox → jobtitle-input: "${label}"`);
+      });
+    });
+  }
+
+  function closeAllPopups() {
+    document.querySelectorAll(".wd-popup.open").forEach((p) => {
+      p.classList.remove("open");
+      p.setAttribute("data-automation-activepopup", "false");
+    });
+    document.querySelectorAll('[data-automation-id="selectWidget"]').forEach((t) => {
+      t.setAttribute("aria-expanded", "false");
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    const inside = e.target.closest(".field");
+    if (!inside) closeAllPopups();
+  });
+
+  form.addEventListener("input", (e) => {
+    if (e.target.closest(".wd-popup")) return;
+    logEvent(`input  → ${e.target.name || e.target.id}: "${e.target.value}"`);
+  });
+  form.addEventListener("change", (e) => {
+    logEvent(`change → ${e.target.name || e.target.id}: "${e.target.value}"`);
+  });
+</script>
+</body>
+</html>

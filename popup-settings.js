@@ -7,6 +7,31 @@
 
   const PDFJS_WORKER = chrome.runtime.getURL("lib/pdf.worker.min.js");
 
+  function createEl(tag, attrs, ...children) {
+    const el = document.createElement(tag);
+    if (typeof attrs === "string") { el.className = attrs; }
+    else if (attrs) {
+      for (const [k, v] of Object.entries(attrs)) {
+        if (k === "text") el.textContent = v;
+        else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+        else el.setAttribute(k, v);
+      }
+    }
+    for (const child of children) {
+      if (typeof child === "string") el.appendChild(document.createTextNode(child));
+      else if (child) el.appendChild(child);
+    }
+    return el;
+  }
+
+  function clearAndAppend(container, nodes) {
+    container.replaceChildren(...nodes);
+  }
+
+  function actionBtn(label, action, id, className) {
+    return createEl("button", { type: "button", class: className, "data-action": action, "data-id": id }, label);
+  }
+
   function setStatus(text, isError = false) {
     statusEl.textContent = text;
     statusEl.style.color = isError ? "#b42318" : "#344054";
@@ -130,20 +155,17 @@
       container.textContent = "No education entries yet.";
       return;
     }
-    container.innerHTML = education
-      .map(
-        (e) =>
-          `<div class="card" style="margin-bottom:8px;padding:8px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-              <span><strong>${escapeHtml(e.degree || "")}</strong> — ${escapeHtml(e.institution || "")}</span>
-              <span style="display:flex;gap:6px;flex-shrink:0;">
-                <button type="button" class="secondary" data-action="edit-education" data-id="${e.id}">Edit</button>
-                <button type="button" class="danger" data-action="delete-education" data-id="${e.id}">Delete</button>
-              </span>
-            </div>
-          </div>`
-      )
-      .join("");
+    const cards = education.map((e) => {
+      const strong = createEl("strong", null, e.degree || "");
+      const label = createEl("span", null, strong, ` — ${e.institution || ""}`);
+      const buttons = createEl("span", { style: { display: "flex", gap: "6px", flexShrink: "0" } },
+        actionBtn("Edit", "edit-education", e.id, "secondary"),
+        actionBtn("Delete", "delete-education", e.id, "danger")
+      );
+      const row = createEl("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" } }, label, buttons);
+      return createEl("div", { class: "card", style: { marginBottom: "8px", padding: "8px" } }, row);
+    });
+    clearAndAppend(container, cards);
   }
 
   function renderExperienceList(experience) {
@@ -152,29 +174,20 @@
       container.textContent = "No experience entries yet.";
       return;
     }
-    container.innerHTML = experience
-      .map((x) => {
-        const end = x.current || !x.endDate ? "Present" : x.endDate;
-        const range = `${x.startDate || "?"} — ${end}`;
-        return `<div class="card" style="margin-bottom:8px;padding:8px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-              <span><strong>${escapeHtml(x.title || "")}</strong> — ${escapeHtml(x.company || "")}<br/><span class="status">${escapeHtml(range)}</span></span>
-              <span style="display:flex;gap:6px;flex-shrink:0;">
-                <button type="button" class="secondary" data-action="edit-experience" data-id="${x.id}">Edit</button>
-                <button type="button" class="danger" data-action="delete-experience" data-id="${x.id}">Delete</button>
-              </span>
-            </div>
-          </div>`;
-      })
-      .join("");
-  }
-
-  function escapeHtml(s) {
-    return String(s || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+    const cards = experience.map((x) => {
+      const end = x.current || !x.endDate ? "Present" : x.endDate;
+      const range = `${x.startDate || "?"} — ${end}`;
+      const strong = createEl("strong", null, x.title || "");
+      const rangeSpan = createEl("span", "status", range);
+      const label = createEl("span", null, strong, ` — ${x.company || ""}`, createEl("br"), rangeSpan);
+      const buttons = createEl("span", { style: { display: "flex", gap: "6px", flexShrink: "0" } },
+        actionBtn("Edit", "edit-experience", x.id, "secondary"),
+        actionBtn("Delete", "delete-experience", x.id, "danger")
+      );
+      const row = createEl("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" } }, label, buttons);
+      return createEl("div", { class: "card", style: { marginBottom: "8px", padding: "8px" } }, row);
+    });
+    clearAndAppend(container, cards);
   }
 
   function clearEducationInputs() {
@@ -269,8 +282,6 @@
     document.getElementById("dryRunMode").checked = Boolean(settings.dryRunMode);
     document.getElementById("devMode").checked = Boolean(settings.devMode);
     document.getElementById("matchThreshold").value = Number(settings.matchThreshold ?? 0.38).toFixed(2);
-    document.getElementById("pinEnabled").checked = Boolean(settings.pinEnabled);
-    document.getElementById("pinCode").value = settings.pinCode || "";
     renderResumeList(resumes);
     renderEducationList(education);
     renderExperienceList(experience);
@@ -305,18 +316,16 @@
       container.textContent = "No saved resumes yet.";
       return;
     }
-    container.innerHTML = resumes
-      .map(
-        (resume) =>
-          `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
-            <span>${escapeHtml(resume.name)} ${resume.roleTag ? `(${escapeHtml(resume.roleTag)})` : ""}</span>
-            <span>
-              <button type="button" data-action="edit-resume" data-id="${resume.id}" class="secondary">Edit</button>
-              <button type="button" data-action="delete-resume" data-id="${resume.id}" class="danger">Delete</button>
-            </span>
-          </div>`
-      )
-      .join("");
+    const rows = resumes.map((resume) => {
+      const labelText = resume.name + (resume.roleTag ? ` (${resume.roleTag})` : "");
+      const label = createEl("span", null, labelText);
+      const buttons = createEl("span", null,
+        actionBtn("Edit", "edit-resume", resume.id, "secondary"),
+        actionBtn("Delete", "delete-resume", resume.id, "danger")
+      );
+      return createEl("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "6px" } }, label, buttons);
+    });
+    clearAndAppend(container, rows);
   }
 
   function loadPdfJs() {
@@ -544,14 +553,6 @@
       document.getElementById("addResumeBtn").textContent = "Update Resume";
       setStatus("Editing resume.");
     }
-  });
-
-  document.getElementById("savePinBtn").addEventListener("click", async () => {
-    const { settings = {} } = await getLocal(["settings"]);
-    settings.pinEnabled = document.getElementById("pinEnabled").checked;
-    settings.pinCode = document.getElementById("pinCode").value.trim();
-    await setLocal({ settings });
-    setStatus("PIN settings saved.");
   });
 
   document.getElementById("clearDataBtn").addEventListener("click", async () => {
