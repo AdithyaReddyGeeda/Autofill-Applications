@@ -185,7 +185,3 @@ disableAutofillDebug()
 ## Contributing
 
 This is a portfolio/personal project, but issues and suggestions are welcome. If you find a job portal where the extension fails, opening an issue with the site name and a screenshot of the form helps a lot.
-
-## License
-
-MIT
