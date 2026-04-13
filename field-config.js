@@ -1,4 +1,24 @@
 (() => {
+  // Shared custom-dropdown trigger selectors used across all platforms.
+  const CUSTOM_DROPDOWN_TRIGGERS = [
+    '[role="combobox"]:not(input[type="text"])',
+    '[aria-haspopup="listbox"]',
+    '[aria-haspopup="true"]'
+  ];
+
+  /**
+   * Merge site-handler trigger selectors (if loaded) with the base set so that
+   * form-detector.js will discover site-specific elements during field scanning.
+   */
+  function mergeSiteTriggers(base, siteId) {
+    const handlers = window.JobAutofillSiteHandlers?.SITE_HANDLERS;
+    if (!handlers) return base;
+    const handler = handlers.find((h) => h.id === siteId);
+    if (!handler?.triggers) return base;
+    const merged = new Set([...base, ...handler.triggers]);
+    return [...merged];
+  }
+
   const PLATFORM_CONFIGS = {
     linkedin: {
       hostPatterns: [/linkedin\.com/i],
@@ -7,7 +27,12 @@
         textarea: ["textarea"],
         select: ["select"],
         checkbox: ['input[type="checkbox"]'],
-        radio: ['input[type="radio"]', '[role="radio"]:not(input)']
+        radio: ['input[type="radio"]', '[role="radio"]:not(input)'],
+        dropdownTrigger: mergeSiteTriggers([
+          ...CUSTOM_DROPDOWN_TRIGGERS,
+          'select[data-test-text-selectable-option]',
+          '.jobs-easy-apply-form-element select'
+        ], "linkedin")
       }
     },
     indeed: {
@@ -17,7 +42,12 @@
         textarea: ["textarea"],
         select: ["select"],
         checkbox: ['input[type="checkbox"]'],
-        radio: ['input[type="radio"]', '[role="radio"]:not(input)']
+        radio: ['input[type="radio"]', '[role="radio"]:not(input)'],
+        dropdownTrigger: mergeSiteTriggers([
+          ...CUSTOM_DROPDOWN_TRIGGERS,
+          'button[data-testid*="dropdown"]',
+          'button[data-testid*="select"]'
+        ], "indeed")
       }
     },
     greenhouse: {
@@ -27,7 +57,13 @@
         textarea: ["textarea"],
         select: ["select"],
         checkbox: ['input[type="checkbox"]'],
-        radio: ['input[type="radio"]', '[role="radio"]:not(input)']
+        radio: ['input[type="radio"]', '[role="radio"]:not(input)'],
+        dropdownTrigger: mergeSiteTriggers([
+          ...CUSTOM_DROPDOWN_TRIGGERS,
+          'select.select__input',
+          '[data-testid*="select"]',
+          '.select-shell'
+        ], "greenhouse")
       }
     },
     lever: {
@@ -37,7 +73,12 @@
         textarea: ["textarea"],
         select: ["select"],
         checkbox: ['input[type="checkbox"]'],
-        radio: ['input[type="radio"]', '[role="radio"]:not(input)']
+        radio: ['input[type="radio"]', '[role="radio"]:not(input)'],
+        dropdownTrigger: mergeSiteTriggers([
+          ...CUSTOM_DROPDOWN_TRIGGERS,
+          '.postings-select',
+          '[data-qa*="select"]'
+        ], "lever")
       }
     },
     workday: {
@@ -48,15 +89,16 @@
         select: ["select[data-automation-id]", "select"],
         checkbox: ['input[type="checkbox"]'],
         radio: ['input[type="radio"]', '[role="radio"]:not(input)'],
-        dropdownTrigger: [
+        dropdownTrigger: mergeSiteTriggers([
           '[data-automation-id="selectWidget"]',
           'div[id*="dropDownSelectList"]',
           'button[data-automation-id="selectWidget"]',
           'button[data-automation-id*="dropDown"]',
           'button[data-automation-id*="DropDown"]',
           'div[data-automation-id*="dropDown"][tabindex]',
-          'div[data-automation-id*="DropDown"][tabindex]'
-        ]
+          'div[data-automation-id*="DropDown"][tabindex]',
+          ...CUSTOM_DROPDOWN_TRIGGERS
+        ], "workday")
       }
     },
     ashby: {
@@ -66,7 +108,13 @@
         textarea: ["textarea"],
         select: ["select"],
         checkbox: ['input[type="checkbox"]'],
-        radio: ['input[type="radio"]', '[role="radio"]:not(input)']
+        radio: ['input[type="radio"]', '[role="radio"]:not(input)'],
+        dropdownTrigger: mergeSiteTriggers([
+          ...CUSTOM_DROPDOWN_TRIGGERS,
+          'button[class*="Select"]',
+          'button[class*="select"]',
+          '[data-testid*="select"]'
+        ], "ashby")
       }
     }
   };
@@ -83,11 +131,13 @@
     textarea: ["textarea", '[contenteditable="true"]'],
     select: ["select"],
     checkbox: ['input[type="checkbox"]'],
-    radio: ['input[type="radio"]', '[role="radio"]:not(input)']
+    radio: ['input[type="radio"]', '[role="radio"]:not(input)'],
+    dropdownTrigger: CUSTOM_DROPDOWN_TRIGGERS
   };
 
   window.JobAutofillConfig = {
     PLATFORM_CONFIGS,
-    GENERIC_SELECTORS
+    GENERIC_SELECTORS,
+    CUSTOM_DROPDOWN_TRIGGERS
   };
 })();

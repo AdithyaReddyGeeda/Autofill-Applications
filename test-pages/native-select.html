@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test: Native Select Dropdowns</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+  .field { margin-bottom: 20px; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 0.9rem; }
+  .hint { font-size: 0.78rem; color: #6b7280; margin-bottom: 4px; }
+  select, input { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; }
+  input:focus, select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  #log { margin-top: 30px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.82rem; font-family: monospace; white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>Native Select Dropdowns</h1>
+<p>Verify the extension fills native <code>&lt;select&gt;</code> elements and dispatches proper change events.</p>
+
+<form id="form">
+  <div class="field">
+    <label for="first_name">First Name</label>
+    <input type="text" id="first_name" name="first_name" placeholder="First name">
+  </div>
+
+  <div class="field">
+    <label for="last_name">Last Name</label>
+    <input type="text" id="last_name" name="last_name" placeholder="Last name">
+  </div>
+
+  <div class="field">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" placeholder="you@example.com">
+  </div>
+
+  <div class="field">
+    <label for="country">Country</label>
+    <div class="hint">Should match profile country / location.</div>
+    <select id="country" name="country">
+      <option value="">Select a country</option>
+      <option value="US">United States</option>
+      <option value="CA">Canada</option>
+      <option value="GB">United Kingdom</option>
+      <option value="DE">Germany</option>
+      <option value="IN">India</option>
+      <option value="AU">Australia</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="gender">Gender</label>
+    <div class="hint">EEO field — should match eeo_responses.gender.</div>
+    <select id="gender" name="gender">
+      <option value="">Select...</option>
+      <option value="male">Male</option>
+      <option value="female">Female</option>
+      <option value="nonbinary">Non-binary</option>
+      <option value="decline">Prefer not to say</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="veteran_status">Veteran Status</label>
+    <div class="hint">EEO field — should match eeo_responses.veteran.</div>
+    <select id="veteran_status" name="veteran_status">
+      <option value="">Please select</option>
+      <option value="yes">I am a protected veteran</option>
+      <option value="no">I am not a protected veteran</option>
+      <option value="decline">I don't wish to answer</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="sponsorship">Do you require visa sponsorship?</label>
+    <select id="sponsorship" name="requires_sponsorship">
+      <option value="">Choose one</option>
+      <option value="yes">Yes</option>
+      <option value="no">No</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="disability">Disability Status</label>
+    <select id="disability" name="disability_status">
+      <option value="">---</option>
+      <option value="yes">Yes, I have a disability</option>
+      <option value="no">No, I do not have a disability</option>
+      <option value="decline">I don't wish to answer</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="experience">Years of Experience</label>
+    <select id="experience" name="years_experience">
+      <option value="">Pick one</option>
+      <option value="0">Less than 1 year</option>
+      <option value="1">1 year</option>
+      <option value="2">2 years</option>
+      <option value="3">3 years</option>
+      <option value="5">5+ years</option>
+      <option value="10">10+ years</option>
+    </select>
+  </div>
+
+  <!-- Disabled options (should be skipped by autofill) -->
+  <div class="field">
+    <label for="restricted">Restricted Options Test</label>
+    <div class="hint">The correct option is disabled — autofill should leave this untouched.</div>
+    <select id="restricted" name="restricted_test">
+      <option value="">Choose...</option>
+      <option value="a" disabled>Option A (disabled)</option>
+      <option value="b">Option B</option>
+      <option value="c">Option C</option>
+    </select>
+  </div>
+</form>
+
+<div id="log">Event log:
+</div>
+
+<script>
+  const log = document.getElementById("log");
+  document.getElementById("form").addEventListener("change", (e) => {
+    const t = e.target;
+    const text = t.tagName === "SELECT" ? t.options[t.selectedIndex]?.text : t.value;
+    log.textContent += `change → ${t.name || t.id}: "${text}" (value="${t.value}")\n`;
+    log.scrollTop = log.scrollHeight;
+  });
+  document.getElementById("form").addEventListener("input", (e) => {
+    const t = e.target;
+    log.textContent += `input  → ${t.name || t.id}: "${t.value}"\n`;
+    log.scrollTop = log.scrollHeight;
+  });
+</script>
+</body>
+</html>

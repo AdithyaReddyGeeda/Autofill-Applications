@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test: React-Style Controlled Inputs</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+  p.intro { font-size: 0.88rem; color: #374151; }
+  .field { margin-bottom: 20px; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 0.9rem; }
+  .hint { font-size: 0.78rem; color: #6b7280; margin-bottom: 4px; }
+  input, select, textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  textarea { resize: vertical; min-height: 80px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; }
+  .checkbox-row input[type="checkbox"] { width: auto; }
+  .state-display { margin-top: 30px; padding: 14px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }
+  .state-display h3 { margin: 0 0 8px 0; font-size: 0.9rem; color: #166534; }
+  .state-display pre { margin: 0; font-size: 0.82rem; white-space: pre-wrap; color: #14532d; }
+  #log { margin-top: 20px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.82rem; font-family: monospace; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>React-Style Controlled Inputs</h1>
+<p class="intro">
+  These inputs behave like React controlled components: setting <code>.value</code> directly is
+  reverted on the next event unless the internal state is updated via the proper handler. The
+  extension must use native property setters and dispatch <code>InputEvent</code> to bypass this.
+</p>
+
+<form id="form">
+  <div class="field">
+    <label for="first_name">First Name</label>
+    <div class="hint">Controlled — reverts unless InputEvent fires correctly.</div>
+    <input type="text" id="first_name" name="first_name" placeholder="First name" data-controlled>
+  </div>
+
+  <div class="field">
+    <label for="last_name">Last Name</label>
+    <div class="hint">Controlled — same behavior as above.</div>
+    <input type="text" id="last_name" name="last_name" placeholder="Last name" data-controlled>
+  </div>
+
+  <div class="field">
+    <label for="email">Email</label>
+    <div class="hint">Controlled text input.</div>
+    <input type="email" id="email" name="email" placeholder="you@example.com" data-controlled>
+  </div>
+
+  <div class="field">
+    <label for="phone">Phone Number</label>
+    <div class="hint">Controlled — also validates format.</div>
+    <input type="tel" id="phone" name="phone" placeholder="(555) 123-4567" data-controlled>
+  </div>
+
+  <div class="field">
+    <label for="linkedin_url">LinkedIn URL</label>
+    <input type="url" id="linkedin_url" name="linkedin_url" placeholder="https://linkedin.com/in/..." data-controlled>
+  </div>
+
+  <div class="field">
+    <label for="cover_letter">Cover Letter</label>
+    <div class="hint">Controlled textarea — tests native textarea setter.</div>
+    <textarea id="cover_letter" name="cover_letter" placeholder="Write your cover letter..." data-controlled></textarea>
+  </div>
+
+  <div class="field">
+    <label for="country">Country</label>
+    <div class="hint">Controlled native select.</div>
+    <select id="country" name="country" data-controlled>
+      <option value="">Select a country</option>
+      <option value="US">United States</option>
+      <option value="CA">Canada</option>
+      <option value="GB">United Kingdom</option>
+      <option value="IN">India</option>
+    </select>
+  </div>
+
+  <div class="field checkbox-row">
+    <input type="checkbox" id="authorized" name="work_authorized" data-controlled>
+    <label for="authorized" style="margin-bottom:0">I am authorized to work in the US</label>
+  </div>
+
+  <div class="field checkbox-row">
+    <input type="checkbox" id="agree_terms" name="agree_terms" data-controlled>
+    <label for="agree_terms" style="margin-bottom:0">I agree to the terms</label>
+  </div>
+</form>
+
+<div class="state-display">
+  <h3>Internal State (mirrors React state)</h3>
+  <pre id="state-view">{}</pre>
+</div>
+
+<div id="log">Event log:
+</div>
+
+<script>
+  const stateView = document.getElementById("state-view");
+  const logEl = document.getElementById("log");
+
+  // Internal "React state" — only updated via event handlers
+  const formState = {};
+
+  function logEvent(msg) {
+    logEl.textContent += msg + "\n";
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function renderState() {
+    stateView.textContent = JSON.stringify(formState, null, 2);
+  }
+
+  // Simulate React controlled behavior:
+  // On each 'input' event, capture the value into state and re-render (set .value back from state).
+  // If .value was set directly without an InputEvent, the next render reverts it.
+  document.querySelectorAll("[data-controlled]").forEach((el) => {
+    const key = el.name || el.id;
+    const isCheckbox = el.type === "checkbox";
+
+    if (isCheckbox) {
+      formState[key] = el.checked;
+    } else {
+      formState[key] = el.value;
+    }
+
+    // "onChange" handler — updates internal state
+    el.addEventListener("input", (e) => {
+      if (isCheckbox) {
+        formState[key] = el.checked;
+      } else {
+        formState[key] = el.value;
+      }
+      renderState();
+      logEvent(`input  → ${key}: ${JSON.stringify(formState[key])}`);
+    });
+
+    el.addEventListener("change", (e) => {
+      if (isCheckbox) {
+        formState[key] = el.checked;
+      } else {
+        formState[key] = el.value;
+      }
+      renderState();
+      logEvent(`change → ${key}: ${JSON.stringify(formState[key])}`);
+    });
+
+    // Simulate React re-render: periodically enforce state → DOM.
+    // If the extension set .value without dispatching InputEvent,
+    // this "re-render" reverts the field.
+    setInterval(() => {
+      if (isCheckbox) {
+        if (el.checked !== formState[key]) {
+          logEvent(`revert → ${key}: checked was ${el.checked}, state is ${formState[key]}`);
+          el.checked = formState[key];
+        }
+      } else {
+        if (el.value !== formState[key]) {
+          logEvent(`revert → ${key}: "${el.value}" reverted to "${formState[key]}"`);
+          el.value = formState[key];
+        }
+      }
+    }, 500);
+  });
+
+  renderState();
+</script>
+</body>
+</html>

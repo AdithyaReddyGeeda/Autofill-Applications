@@ -12,6 +12,157 @@
 
   const SENSITIVE_PATTERNS = /(ssn|social security|passport|routing|bank|credit card)/i;
 
+  // ---------------------------------------------------------------------------
+  //  Dropdown safety: threshold, logging, option filtering, warnings
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Minimum confidence score required to select a dropdown option.  Any match
+   * below this value is treated as "no reliable match" and the field is left
+   * untouched.  Raising this reduces false-positive fills; lowering it
+   * increases recall at the cost of occasional wrong selections.
+   */
+  const SAFE_MATCH_THRESHOLD = 0.45;
+
+  // ---------------------------------------------------------------------------
+  //  Debug mode
+  //
+  //  Two ways to enable:
+  //    1. Turn on "Dev Mode" in the extension settings page.
+  //    2. Run in the browser console:  enableAutofillDebug()
+  //
+  //  When enabled, every dropdown / radio / select fill attempt logs a
+  //  collapsed console group showing: field label, desired value, field type,
+  //  trigger summary, options found, top-5 candidates with scores, and the
+  //  outcome (picked / skipped + reason).
+  // ---------------------------------------------------------------------------
+
+  function isDebug() {
+    return Boolean(STATE.settings?.devMode) || Boolean(window.__autofillDebug);
+  }
+
+  function ddLog(...args) {
+    if (isDebug()) console.log("[Dropdown]", ...args);
+  }
+  function ddWarn(...args) {
+    if (isDebug()) console.warn("[Dropdown]", ...args);
+  }
+
+  /** Human-readable one-liner describing a DOM element. */
+  function elSummary(el) {
+    if (!el) return "(null)";
+    const tag = el.tagName?.toLowerCase() ?? "?";
+    const parts = [tag];
+    const role = el.getAttribute("role");
+    if (role) parts.push(`role="${role}"`);
+    const type = el.type;
+    if (type) parts.push(`type="${type}"`);
+    if (el.id) parts.push(`#${el.id}`);
+    if (el.name) parts.push(`name="${el.name}"`);
+    const aid = el.getAttribute("data-automation-id");
+    if (aid) parts.push(`data-automation-id="${aid}"`);
+    const cls = (el.className || "").toString().trim().slice(0, 60);
+    if (cls) parts.push(`.${cls.split(/\s+/).slice(0, 2).join(".")}`);
+    return `<${parts.join(" ")}>`;
+  }
+
+  /** Classify the control type for debug output. */
+  function fieldTypeLabel(el) {
+    if (!el) return "unknown";
+    const tag = el.tagName?.toLowerCase() ?? "";
+    const type = (el.type || "").toLowerCase();
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    if (tag === "select") return "native-select";
+    if (tag === "input" && type === "radio") return "native-radio";
+    if (tag === "input" && type === "checkbox") return "checkbox";
+    if (role === "radio") return "aria-radio";
+    if (role === "combobox") return "combobox";
+    if (role === "listbox") return "listbox";
+    if (el.getAttribute("aria-haspopup")) return "custom-dropdown";
+    if (tag === "textarea" || el.isContentEditable) return "text-area";
+    if (tag === "input") return `input-${type || "text"}`;
+    return tag;
+  }
+
+  /**
+   * Log a rich, grouped diagnostic block for a single dropdown fill attempt.
+   * Only produces output when debug mode is on.
+   */
+  function logDropdownAttempt({ label, wanted, fieldType, triggerEl, scored, outcome, reason }) {
+    if (!isDebug()) return;
+    const icon = outcome === "picked" ? "\u2705" : "\u274C";
+    const header = `${icon} [Dropdown] ${fieldType} — wanted "${wanted}"`;
+    console.groupCollapsed(header);
+    console.log("Field label :", label || "(none)");
+    console.log("Desired value:", wanted);
+    console.log("Field type   :", fieldType);
+    console.log("Trigger      :", elSummary(triggerEl));
+    console.log("Options found:", scored?.length ?? 0);
+    if (scored?.length) {
+      const top5 = scored.slice(0, 5);
+      console.log("Top candidates:");
+      console.table(top5.map((s, i) => ({
+        "#": i + 1,
+        text: (s.text || s.label || "").slice(0, 80),
+        score: s.score?.toFixed(3)
+      })));
+    }
+    console.log("Outcome      :", outcome);
+    if (reason) console.log("Reason       :", reason);
+    if (triggerEl) console.log("Element      :", triggerEl);
+    console.groupEnd();
+  }
+
+  /**
+   * Structured warnings collected during a single fill pass.
+   * Each entry includes all context needed for the post-fill summary.
+   */
+  const FILL_WARNINGS = [];
+
+  function addFillWarning(warn) {
+    FILL_WARNINGS.push(warn);
+    logDropdownAttempt({
+      label: warn.label,
+      wanted: warn.wanted,
+      fieldType: warn.fieldType || "unknown",
+      triggerEl: warn.trigger,
+      scored: warn.topCandidates,
+      outcome: "skipped",
+      reason: warn.reason
+    });
+  }
+
+  function drainFillWarnings() {
+    const copy = [...FILL_WARNINGS];
+    FILL_WARNINGS.length = 0;
+    return copy;
+  }
+
+  /**
+   * Returns true when a DOM option node should be excluded from scoring.
+   * Filters out disabled, hidden, aria-hidden, placeholder-text, and
+   * duplicate-text options in a single pass.
+   */
+  function isOptionNodeUnsafe(node, seenTexts) {
+    if (!node || node.nodeType !== 1) return true;
+    if (node.getAttribute("aria-disabled") === "true") return true;
+    if (node.hasAttribute("disabled")) return true;
+    if (node.getAttribute("aria-hidden") === "true") return true;
+    const style = node.getAttribute("style") || "";
+    if (/display\s*:\s*none/i.test(style)) return true;
+    const r = node.getBoundingClientRect?.();
+    if (r && r.width < 1 && r.height < 1) return true;
+    const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+    if (!text || text.length > 500) return true;
+    if (/^(select|choose|please|pick|--|−|—|\.\.\.|\s)*$/i.test(text)) return true;
+    if (seenTexts) {
+      const key = text.toLowerCase();
+      if (seenTexts.has(key)) return true;
+      seenTexts.add(key);
+    }
+    return false;
+  }
+
   function isExtensionContextValid() {
     try {
       return Boolean(chrome.runtime.id);
@@ -216,11 +367,75 @@
     });
   }
 
-  function setNativeInputValue(el, value) {
-    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
-    if (descriptor?.set) descriptor.set.call(el, value);
+  // ---------------------------------------------------------------------------
+  //  Unified event dispatch & native property setters
+  //
+  //  React 16+ uses a synthetic event system and reads values via native
+  //  property descriptors.  Setting el.value directly on a controlled input
+  //  does nothing because React's setter intercepts it and reverts it on the
+  //  next render.  We must:
+  //    1. Call the *native* setter from the prototype (HTMLInputElement,
+  //       HTMLTextAreaElement, HTMLSelectElement).
+  //    2. Dispatch a proper focus → input → change → blur sequence so that
+  //       React's event delegation (attached to the root) picks it up.
+  //    3. Use InputEvent (not plain Event) for "input" so frameworks that
+  //       inspect event.data / event.inputType see realistic values.
+  // ---------------------------------------------------------------------------
+
+  /** Set .value via the native prototype setter, bypassing React's override. */
+  function setNativeValue(el, value) {
+    const tag = el.tagName?.toLowerCase();
+    let desc;
+    if (tag === "textarea") {
+      desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+    } else if (tag === "select") {
+      desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+    } else {
+      desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+    }
+    if (desc?.set) desc.set.call(el, value);
     else el.value = value;
   }
+
+  /** Set .checked via the native prototype setter, bypassing React's override. */
+  function setNativeChecked(el, checked) {
+    const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked");
+    if (desc?.set) desc.set.call(el, checked);
+    else el.checked = checked;
+  }
+
+  /**
+   * Dispatch focus → input → change → blur on an element.
+   * This is the exact sequence a real user interaction produces and the
+   * minimum React / Angular / Vue need to detect a programmatic change.
+   */
+  function dispatchFieldEvents(el, value) {
+    const opts = { bubbles: true, cancelable: true, composed: true };
+    try { el.dispatchEvent(new FocusEvent("focus", { ...opts, relatedTarget: null })); } catch { /* ignore */ }
+    try { el.dispatchEvent(new FocusEvent("focusin", { ...opts, relatedTarget: null })); } catch { /* ignore */ }
+    try {
+      el.dispatchEvent(new InputEvent("input", {
+        ...opts,
+        data: value != null ? String(value) : null,
+        inputType: "insertText"
+      }));
+    } catch {
+      el.dispatchEvent(new Event("input", opts));
+    }
+    try { el.dispatchEvent(new Event("change", opts)); } catch { /* ignore */ }
+    try { el.dispatchEvent(new FocusEvent("blur", { ...opts, relatedTarget: null })); } catch { /* ignore */ }
+    try { el.dispatchEvent(new FocusEvent("focusout", { ...opts, relatedTarget: null })); } catch { /* ignore */ }
+  }
+
+  /** Lightweight variant — only input + change (for radios, checkboxes, inner clicks). */
+  function dispatchChangeEvents(el) {
+    const opts = { bubbles: true, cancelable: true, composed: true };
+    try { el.dispatchEvent(new Event("input", opts)); } catch { /* ignore */ }
+    try { el.dispatchEvent(new Event("change", opts)); } catch { /* ignore */ }
+  }
+
+  // Legacy alias kept so existing call-sites that only need the value setter still work.
+  function setNativeInputValue(el, value) { setNativeValue(el, value); }
 
   function formatDateValue(value, mode) {
     if (!value) return "";
@@ -241,51 +456,174 @@
     return mode === "month" ? `${year}-${month}` : `${year}-${month}-${day}`;
   }
 
+  // ---------------------------------------------------------------------------
+  //  Dropdown option matching — normalisation, synonyms, scored comparison
+  // ---------------------------------------------------------------------------
+
+  const PLACEHOLDER_PATTERN = /^(select|choose|please|pick|--|−|—|\.\.\.|\s)*$/i;
+
+  /** Normalise a string for option comparison: lowercase, collapse whitespace, strip punctuation. */
   function normChoice(s) {
     return String(s || "")
       .toLowerCase()
+      .replace(/[''`]/g, "'")
+      .replace(/[""]/g, '"')
+      .replace(/[._\-–—,;:!?()[\]{}]+/g, " ")
       .replace(/\s+/g, " ")
-      .replace(/[._-]+/g, " ")
       .trim();
   }
 
+  /** Strip ALL non-alphanumeric characters for ultra-fuzzy comparison. */
+  function alphaOnly(s) {
+    return s.replace(/[^a-z0-9]/g, "");
+  }
+
+  /** Common country / region synonym map (wanted → canonical alternatives). */
+  const COUNTRY_SYNONYMS = {
+    "us": ["united states", "united states of america", "usa", "u s a", "u s"],
+    "usa": ["united states", "united states of america", "us", "u s a"],
+    "united states": ["usa", "us", "united states of america", "u s a"],
+    "united states of america": ["usa", "us", "united states"],
+    "uk": ["united kingdom", "great britain", "gb", "england"],
+    "united kingdom": ["uk", "great britain", "gb"],
+    "uae": ["united arab emirates"],
+    "united arab emirates": ["uae"]
+  };
+
+  /**
+   * Expand a wanted value into a set of equivalent alternatives.
+   * Returns an array that always includes the original.
+   */
+  function expandSynonyms(wanted) {
+    const w = normChoice(wanted);
+    const alts = [w];
+    const mapped = COUNTRY_SYNONYMS[w];
+    if (mapped) alts.push(...mapped.map(normChoice));
+    return [...new Set(alts)];
+  }
+
+  function isYesLike(s)  { return /^(yes|y|true|1)$/i.test(s.trim()); }
+  function isNoLike(s)   { return /^(no|n|false|0)$/i.test(s.trim()); }
+
+  /**
+   * Score how well an option (by its value attribute and visible text) matches
+   * the wanted string.  Returns a number in [0, 1].
+   *
+   * Scoring tiers (highest wins):
+   *   1.00  — exact visible-text or value match (case-insensitive, normalised)
+   *   0.97  — synonym match (e.g. "US" wanted, option says "United States")
+   *   0.95  — one string is a prefix of the other up to a word boundary
+   *   0.93  — contains match (either direction)
+   *   0.90  — value attribute contains / contained-in match
+   *   0.88  — alpha-only (no spaces/punct) contains match
+   *   0.86  — yes/no semantic match
+   *   0.85  — "prefer not" / "decline" semantic match
+   *   0.82  — numeric prefix match ("2" matches "2 years", "3+" matches "3")
+   *   ≤0.8  — Levenshtein fuzzy similarity
+   */
   function scoreChoiceMatch(wantedRaw, valueRaw, textRaw) {
     const w = normChoice(wantedRaw);
     if (!w) return 0;
     const val = normChoice(valueRaw);
     const text = normChoice(textRaw);
-    if (val === w || text === w) return 1;
+
+    // --- Tier 1: exact match ---
+    if (text === w || val === w) return 1;
+
+    // --- Tier 2: synonym expansion ---
+    const alts = expandSynonyms(w);
+    if (alts.length > 1) {
+      for (const alt of alts) {
+        if (alt === text || alt === val) return 0.97;
+      }
+    }
+
+    // --- Tier 3: prefix/starts-with at a word boundary ---
+    if (text.startsWith(w + " ") || w.startsWith(text + " ")) return 0.95;
+
+    // --- Tier 4: contains ---
     if (text.includes(w) || w.includes(text)) return 0.93;
-    if (val && (val.includes(w) || w.includes(val))) return 0.9;
-    const wt = w.replace(/\s+/g, "");
-    const tt = text.replace(/\s+/g, "");
-    if (tt.includes(wt) || wt.includes(tt)) return 0.88;
-    if (/^no\b|^n$/i.test(w.trim()) && /\b(no|not |don't|do not|without|decline)\b/i.test(text) && !/\byes\b/i.test(text)) return 0.86;
-    if (/^yes\b|^y$/i.test(w.trim()) && /\byes\b/i.test(text) && !/\bno\b|not |don't|do not/i.test(text)) return 0.84;
-    if (/\bprefer not\b|decline to state|i don't wish|wish not to/i.test(w) && /\b(decline|prefer not|not wish|don't wish)\b/i.test(text)) return 0.9;
+    if (val && (val.includes(w) || w.includes(val))) return 0.90;
+
+    // --- Tier 5: alpha-only contains ---
+    const wa = alphaOnly(w);
+    const ta = alphaOnly(text);
+    if (wa && ta && (ta.includes(wa) || wa.includes(ta))) return 0.88;
+
+    // --- Tier 6: yes/no semantic match ---
+    if (isYesLike(w)) {
+      if (/\byes\b/.test(text) && !/\bno\b/.test(text)) return 0.86;
+    }
+    if (isNoLike(w)) {
+      if (/\b(no|not |don't|do not|decline)\b/.test(text) && !/\byes\b/.test(text)) return 0.86;
+    }
+
+    // --- Tier 7: "prefer not to say" / "decline" ---
+    if (/prefer not|decline|don't wish|do not wish/i.test(w) &&
+        /prefer not|decline|don't wish|do not wish/i.test(text)) return 0.85;
+
+    // --- Tier 8: numeric prefix ("2" ↔ "2 years", "3+" ↔ "3") ---
+    const wNum = w.replace(/[^0-9.]/g, "");
+    const tNum = text.replace(/[^0-9.]/g, "");
+    if (wNum && tNum && wNum === tNum) return 0.82;
+
+    // --- Tier 9: synonym expansion contains ---
+    for (const alt of alts) {
+      if (text.includes(alt) || alt.includes(text)) return 0.80;
+    }
+
+    // --- Tier 10: Levenshtein fuzzy ---
     const sim = window.JobAutofillMatcher;
     return Math.max(sim.similarity(w, text), val ? sim.similarity(w, val) : 0);
   }
 
+  /** True if an <option> looks like a placeholder that should never be picked. */
+  function isPlaceholderOption(opt) {
+    const v = opt.value;
+    const t = opt.textContent.trim();
+    if (v === "" && (!t || PLACEHOLDER_PATTERN.test(t))) return true;
+    if (v === "" && t === "") return true;
+    if (PLACEHOLDER_PATTERN.test(t) && (v === "" || v === t)) return true;
+    return false;
+  }
+
+  /**
+   * Pick the best <option> inside a native <select> for a given wanted value.
+   * Returns { option, score } or null.
+   */
   function pickBestSelectOption(selectEl, wanted) {
     const w = String(wanted || "").trim();
     if (!w) return null;
+    const seenTexts = new Set();
     const options = [...selectEl.querySelectorAll("option")].filter((opt) => {
-      const v = opt.value;
-      const t = opt.textContent.trim();
-      if (v === "" && (!t || /^(select|choose|please|--|−)/i.test(t))) return false;
+      if (isPlaceholderOption(opt)) return false;
+      if (opt.disabled) return false;
+      const key = (opt.textContent || "").trim().toLowerCase();
+      if (seenTexts.has(key)) return false;
+      seenTexts.add(key);
       return true;
     });
-    let best = null;
-    let bestScore = 0;
-    for (const opt of options) {
-      const s = scoreChoiceMatch(w, opt.value, opt.textContent);
-      if (s > bestScore) {
-        bestScore = s;
-        best = opt;
-      }
+    const scored = options.map((opt) => ({
+      node: opt,
+      text: (opt.textContent || "").trim(),
+      score: scoreChoiceMatch(w, opt.value, opt.textContent)
+    })).sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    if (!best || best.score < SAFE_MATCH_THRESHOLD) {
+      addFillWarning({
+        trigger: selectEl, wanted: w, reason: "native-select-low-confidence",
+        label: selectEl.getAttribute("aria-label") || selectEl.name || "",
+        fieldType: "native-select", bestText: best?.text, bestScore: best?.score,
+        topCandidates: scored.slice(0, 5)
+      });
+      return null;
     }
-    return bestScore >= 0.35 ? best : null;
+    logDropdownAttempt({
+      label: selectEl.getAttribute("aria-label") || selectEl.name || "",
+      wanted: w, fieldType: "native-select", triggerEl: selectEl,
+      scored, outcome: "picked", reason: null
+    });
+    return best.node;
   }
 
   function sleep(ms) {
@@ -324,9 +662,6 @@
     return isWorkdayJobsHost() && String(matchKey || "").startsWith("eeo_") && isWorkdayComboboxLike(el);
   }
 
-  function usesWorkdaySyntheticFill(el, matchKey) {
-    return isWorkdayDropdownTrigger(el) || shouldUseWorkdayComboboxFill(el, matchKey);
-  }
 
   function isWorkdayOptionExcluded(node) {
     return Boolean(node?.closest?.('[data-automation-id="selectedItem"]'));
@@ -337,15 +672,26 @@
     return r && r.width > 1 && r.height > 1;
   }
 
-  function dispatchFullPointerClick(el) {
-    if (!el) return;
-    let cx = 0;
-    let cy = 0;
+  /** Find the center of the nearest visible ancestor when el itself is 0x0 (hidden radios, etc.) */
+  function visibleCenter(el) {
     try {
       const r = el.getBoundingClientRect();
-      cx = r.left + r.width / 2;
-      cy = r.top + r.height / 2;
+      if (r.width > 0 && r.height > 0) return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
     } catch { /* ignore */ }
+    let cur = el.parentElement;
+    for (let i = 0; i < 6 && cur; i += 1) {
+      try {
+        const r = cur.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+      } catch { /* ignore */ }
+      cur = cur.parentElement;
+    }
+    return { cx: 100, cy: 100 };
+  }
+
+  function dispatchFullPointerClick(el) {
+    if (!el) return;
+    const { cx, cy } = visibleCenter(el);
     const shared = { bubbles: true, cancelable: true, composed: true, view: window, clientX: cx, clientY: cy };
     try {
       el.dispatchEvent(new PointerEvent("pointerdown", { ...shared, pointerId: 1, pointerType: "mouse" }));
@@ -366,13 +712,14 @@
   function collectWorkdayListScores(wanted) {
     const scored = [];
     const seen = new Set();
+    const seenTexts = new Set();
     const pushNode = (node, textSource) => {
       if (!node || seen.has(node) || isWorkdayOptionExcluded(node)) return;
-      if (!optionVisibleEnough(node)) return;
       seen.add(node);
+      if (isOptionNodeUnsafe(node, seenTexts)) return;
       const text = normChoice(textSource || node.textContent || "");
-      if (!text || text.length > 500) return;
-      scored.push({ node, score: scoreChoiceMatch(wanted, "", text) });
+      if (!text) return;
+      scored.push({ node, text, score: scoreChoiceMatch(wanted, "", text) });
     };
 
     document.querySelectorAll('[data-automation-activepopup="true"] [role="option"]').forEach((node) => {
@@ -406,12 +753,14 @@
       scored = collectWorkdayListScores(wanted);
     }
     const best = scored[0];
-    if (!best || best.score < 0.32) {
-      try {
-        document.body.click();
-      } catch {
-        /* ignore */
-      }
+    if (!best || best.score < SAFE_MATCH_THRESHOLD) {
+      addFillWarning({
+        trigger: null, wanted, reason: "workday-list-low-confidence",
+        label: "", fieldType: "workday-dropdown",
+        bestText: best?.text, bestScore: best?.score,
+        topCandidates: scored.slice(0, 5)
+      });
+      try { document.body.click(); } catch { /* ignore */ }
       await sleep(120);
       return false;
     }
@@ -427,6 +776,10 @@
     } catch {
       return false;
     }
+    logDropdownAttempt({
+      label: "", wanted, fieldType: "workday-dropdown", triggerEl: target,
+      scored, outcome: "picked", reason: null
+    });
     await sleep(220);
     return true;
   }
@@ -460,10 +813,9 @@
     dispatchFullPointerClick(input);
     await sleep(200);
     try {
-      setNativeInputValue(input, "");
-      setNativeInputValue(input, wanted);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new InputEvent("input", { bubbles: true, data: wanted, inputType: "insertText" }));
+      setNativeValue(input, "");
+      setNativeValue(input, wanted);
+      dispatchFieldEvents(input, wanted);
     } catch {
       /* ignore */
     }
@@ -481,6 +833,322 @@
     }
     return null;
   }
+
+  function parseAriaIdList(attr) {
+    if (!attr) return [];
+    return String(attr)
+      .trim()
+      .split(/\s+/)
+      .map((id) => id.trim())
+      .filter(Boolean);
+  }
+
+  function findListboxRootFromIds(trigger) {
+    if (!trigger || trigger.nodeType !== 1) return null;
+    for (const raw of [trigger.getAttribute("aria-controls"), trigger.getAttribute("aria-owns")]) {
+      for (const id of parseAriaIdList(raw)) {
+        const node = document.getElementById(id);
+        if (!node) continue;
+        const role = (node.getAttribute("role") || "").toLowerCase();
+        if (role === "listbox") return node;
+        const inner = node.querySelector?.('[role="listbox"]');
+        if (inner) return inner;
+      }
+    }
+    return null;
+  }
+
+  function collectGenericOptionCandidates(rootEl) {
+    if (!rootEl?.querySelectorAll) return [];
+    const out = [];
+    const seenTexts = new Set();
+    for (const node of rootEl.querySelectorAll('[role="option"]')) {
+      if (isOptionNodeUnsafe(node, seenTexts)) continue;
+      out.push(node);
+    }
+    return out;
+  }
+
+  function findListboxesWithVisibleOptions() {
+    return [...document.querySelectorAll('[role="listbox"]')].filter(
+      (lb) => collectGenericOptionCandidates(lb).length > 0
+    );
+  }
+
+  function pickClosestListboxToTrigger(trigger, listboxes) {
+    if (!listboxes?.length) return null;
+    let tr;
+    try {
+      tr = trigger.getBoundingClientRect();
+    } catch {
+      return listboxes[listboxes.length - 1];
+    }
+    let best = listboxes[0];
+    let bestScore = Infinity;
+    for (const lb of listboxes) {
+      let r;
+      try {
+        r = lb.getBoundingClientRect();
+      } catch {
+        continue;
+      }
+      const vert = r.top >= tr.bottom - 2 ? r.top - tr.bottom : Math.abs(r.top - tr.top);
+      const horz = Math.max(0, Math.max(tr.left - r.right, r.left - tr.right));
+      const dist = vert + horz * 0.15;
+      if (dist < bestScore) {
+        bestScore = dist;
+        best = lb;
+      }
+    }
+    return best;
+  }
+
+  function collectFallbackVisibleOptionsNearTrigger(triggerEl) {
+    let tr;
+    try {
+      tr = triggerEl.getBoundingClientRect();
+    } catch {
+      tr = null;
+    }
+    const seenTexts = new Set();
+    return [...document.querySelectorAll('[role="option"]')].filter((node) => {
+      if (isOptionNodeUnsafe(node, seenTexts)) return false;
+      if (!tr) return true;
+      const r = node.getBoundingClientRect();
+      return r.bottom >= tr.top - 40;
+    });
+  }
+
+  function isGenericCustomDropdown(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName?.toLowerCase();
+    if (tag === "select" || tag === "textarea") return false;
+
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    const hasPopup = (el.getAttribute("aria-haspopup") || "").toLowerCase();
+
+    if (role === "combobox" || role === "listbox") return true;
+
+    if (hasPopup === "listbox" || hasPopup === "menu") {
+      return tag === "div" || tag === "button" || tag === "span" || tag === "a";
+    }
+
+    return false;
+  }
+
+  async function setGenericDropdownValue(trigger, wantedRaw) {
+    const wanted = String(wantedRaw || "").trim();
+    if (!wanted) return null;
+
+    const triggerRole = (trigger.getAttribute("role") || "").toLowerCase();
+
+    const tryResolveOptions = () => {
+      if (triggerRole === "listbox") {
+        return collectGenericOptionCandidates(trigger);
+      }
+      const idLb = findListboxRootFromIds(trigger);
+      if (idLb) {
+        const fromId = collectGenericOptionCandidates(idLb);
+        if (fromId.length) return fromId;
+      }
+      const lbs = findListboxesWithVisibleOptions();
+      const closest = pickClosestListboxToTrigger(trigger, lbs);
+      if (closest) {
+        const fromLb = collectGenericOptionCandidates(closest);
+        if (fromLb.length) return fromLb;
+      }
+      return [];
+    };
+
+    if (triggerRole !== "listbox") {
+      try {
+        trigger.scrollIntoView({ block: "center", inline: "nearest" });
+      } catch {
+        /* ignore */
+      }
+      await sleep(70);
+      try {
+        trigger.focus?.();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    let candidates = tryResolveOptions();
+    if (!candidates.length && triggerRole !== "listbox") {
+      dispatchFullPointerClick(trigger);
+      const waits = [260, 220, 320, 400];
+      for (const ms of waits) {
+        await sleep(ms);
+        candidates = tryResolveOptions();
+        if (candidates.length) break;
+        candidates = collectFallbackVisibleOptionsNearTrigger(trigger);
+        if (candidates.length) break;
+      }
+    }
+
+    if (!candidates.length && triggerRole !== "listbox") {
+      dispatchFullPointerClick(trigger);
+      await sleep(280);
+      candidates = tryResolveOptions();
+      if (!candidates.length) {
+        candidates = collectFallbackVisibleOptionsNearTrigger(trigger);
+      }
+    }
+
+    const scored = candidates.map((node) => {
+      const label = (node.textContent || "").replace(/\s+/g, " ").trim();
+      const aria = (node.getAttribute("aria-label") || "").trim();
+      const val = (node.getAttribute("data-value") || node.getAttribute("value") || "").trim();
+      const s = Math.max(scoreChoiceMatch(wanted, val, label), scoreChoiceMatch(wanted, val, aria));
+      return { node, text: label || aria, score: s };
+    }).sort((a, b) => b.score - a.score);
+
+    const best = scored[0];
+    if (!best || best.score < SAFE_MATCH_THRESHOLD) {
+      addFillWarning({
+        trigger, wanted, reason: "generic-dropdown-low-confidence",
+        label: trigger.getAttribute("aria-label") || "", fieldType: fieldTypeLabel(trigger),
+        bestText: best?.text, bestScore: best?.score,
+        topCandidates: scored.slice(0, 5)
+      });
+      try { document.body.click(); } catch { /* ignore */ }
+      await sleep(80);
+      return null;
+    }
+    try {
+      best.node.scrollIntoView({ block: "center", inline: "nearest" });
+    } catch {
+      /* ignore */
+    }
+    const radio = best.node.querySelector?.('input[type="radio"]');
+    try {
+      if (radio) {
+        radio.focus?.();
+        dispatchFullPointerClick(radio);
+      } else {
+        dispatchFullPointerClick(best.node);
+      }
+    } catch {
+      /* ignore */
+    }
+    dispatchChangeEvents(best.node);
+    logDropdownAttempt({
+      label: trigger.getAttribute("aria-label") || "", wanted,
+      fieldType: fieldTypeLabel(trigger), triggerEl: trigger,
+      scored, outcome: "picked", reason: null
+    });
+    await sleep(120);
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Generic custom-dropdown handler (Ashby, Greenhouse, Lever, etc.)
+  //  Works for any trigger with role="combobox", aria-haspopup="listbox", etc.
+  //  Delegates to Workday-specific handlers when on a Workday host.
+  // ---------------------------------------------------------------------------
+
+  function isGenericCustomDropdown(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (isWorkdayDropdownTrigger(el)) return false;
+    return window.JobAutofillDetector?.isCustomDropdownTrigger?.(el) || false;
+  }
+
+  /** Collect scored option elements from any open listbox/menu in the DOM. */
+  function collectGenericListboxScores(wanted) {
+    const scored = [];
+    const seen = new Set();
+    const seenTexts = new Set();
+    const push = (node) => {
+      if (!node || seen.has(node)) return;
+      seen.add(node);
+      if (isOptionNodeUnsafe(node, seenTexts)) return;
+      const text = normChoice(node.textContent || "");
+      if (!text) return;
+      scored.push({ node, text, score: scoreChoiceMatch(wanted, "", text) });
+    };
+    document.querySelectorAll('[role="option"]').forEach(push);
+    document.querySelectorAll('[role="listbox"] li').forEach(push);
+    document.querySelectorAll('[data-value]').forEach((n) => {
+      if (n.closest('[role="listbox"], [role="menu"], [aria-expanded="true"]')) push(n);
+    });
+    return scored.sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * Open a custom dropdown trigger, wait for options to render, pick the best
+   * match, click it, then dispatch change events. Returns previous selected text
+   * or null if nothing was picked.
+   */
+  async function openAndPickDropdownOption(trigger, wantedRaw) {
+    const wanted = String(wantedRaw || "").trim();
+    if (!wanted) return null;
+
+    // Remember what was selected before for undo.
+    const prior = (trigger.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120);
+
+    // Scroll into view and open.
+    try { trigger.scrollIntoView({ block: "center", inline: "nearest" }); } catch { /* ignore */ }
+    await sleep(60);
+    try { trigger.focus?.(); } catch { /* ignore */ }
+    dispatchFullPointerClick(trigger);
+    await sleep(400);
+
+    // If the trigger is an <input role="combobox">, type into it to filter.
+    const tag = trigger.tagName?.toLowerCase();
+    if (tag === "input") {
+      try {
+        setNativeValue(trigger, "");
+        setNativeValue(trigger, wanted);
+        dispatchFieldEvents(trigger, wanted);
+      } catch { /* ignore */ }
+      await sleep(300);
+    }
+
+    // Try to find and click the best option from whatever menu appeared.
+    let scored = collectGenericListboxScores(wanted);
+    if (!scored.length) {
+      await sleep(400);
+      scored = collectGenericListboxScores(wanted);
+    }
+    const best = scored[0];
+    if (!best || best.score < SAFE_MATCH_THRESHOLD) {
+      addFillWarning({
+        trigger, wanted, reason: "openAndPick-low-confidence",
+        label: trigger.getAttribute("aria-label") || "", fieldType: fieldTypeLabel(trigger),
+        bestText: best?.text, bestScore: best?.score,
+        topCandidates: scored.slice(0, 5)
+      });
+      try { document.body.click(); } catch { /* ignore */ }
+      try {
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      } catch { /* ignore */ }
+      await sleep(100);
+      return null;
+    }
+
+    dispatchFullPointerClick(best.node);
+    await sleep(200);
+
+    dispatchFieldEvents(trigger, wanted);
+    logDropdownAttempt({
+      label: trigger.getAttribute("aria-label") || "", wanted,
+      fieldType: fieldTypeLabel(trigger), triggerEl: trigger,
+      scored, outcome: "picked", reason: null
+    });
+    return prior;
+  }
+
+  function usesSyntheticFill(el, matchKey) {
+    if (isWorkdayDropdownTrigger(el) || shouldUseWorkdayComboboxFill(el, matchKey) || isGenericCustomDropdown(el)) return true;
+    const siteHandlers = window.JobAutofillSiteHandlers;
+    if (siteHandlers?.detectSiteHandler() && isGenericCustomDropdown(el)) return true;
+    return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Aria/Radix custom radio helpers
+  // ---------------------------------------------------------------------------
 
   function isAriaCustomRadio(el) {
     return Boolean(
@@ -520,7 +1188,12 @@
     } else {
       options = ariaRadioSiblingsWithoutGroup(rep);
     }
-    options = options.filter((n) => !(n.tagName?.toLowerCase() === "input" && (n.type || "").toLowerCase() === "radio"));
+    options = options.filter((n) => {
+      if (n.tagName?.toLowerCase() === "input" && (n.type || "").toLowerCase() === "radio") return false;
+      if (n.getAttribute("aria-disabled") === "true") return false;
+      if (n.hasAttribute("disabled")) return false;
+      return true;
+    });
     const prior = rg
       ? ariaRadioGroupSelectedText(rg)
       : (() => {
@@ -530,44 +1203,51 @@
           );
           return cur ? (cur.textContent || "").replace(/\s+/g, " ").trim() : "";
         })();
-    let best = null;
-    let bestScore = 0;
-    for (const n of options) {
+    const scored = options.map((n) => {
       const label = (n.textContent || "").replace(/\s+/g, " ").trim();
       const aria = (n.getAttribute("aria-label") || "").trim();
       const s = Math.max(scoreChoiceMatch(w, "", label), scoreChoiceMatch(w, "", aria));
-      if (s > bestScore) {
-        bestScore = s;
-        best = n;
-      }
+      return { node: n, text: label || aria, score: s };
+    }).sort((a, b) => b.score - a.score);
+
+    const rgLabel = rg?.getAttribute("aria-label") || "";
+    const best = scored[0];
+    if (!best || best.score < SAFE_MATCH_THRESHOLD) {
+      addFillWarning({
+        trigger: rep, wanted: w, reason: "aria-radio-low-confidence",
+        label: rgLabel, fieldType: "aria-radio",
+        bestText: best?.text, bestScore: best?.score,
+        topCandidates: scored.slice(0, 5)
+      });
+      return null;
     }
-    if (!best || bestScore < 0.35) return null;
     try {
-      best.scrollIntoView({ block: "center", inline: "nearest" });
+      best.node.scrollIntoView({ block: "center", inline: "nearest" });
     } catch {
       /* ignore */
     }
     try {
-      best.focus?.({ preventScroll: true });
+      best.node.focus?.({ preventScroll: true });
     } catch {
       /* ignore */
     }
-    dispatchFullPointerClick(best);
-    try {
-      best.dispatchEvent(new Event("input", { bubbles: true }));
-      best.dispatchEvent(new Event("change", { bubbles: true }));
-    } catch {
-      /* ignore */
-    }
-    return { __ariaRadio: true, previous: prior, target: best };
+    dispatchFullPointerClick(best.node);
+    dispatchChangeEvents(best.node);
+    logDropdownAttempt({
+      label: rgLabel, wanted: w, fieldType: "aria-radio", triggerEl: rep,
+      scored, outcome: "picked", reason: null
+    });
+    return { __ariaRadio: true, previous: prior, target: best.node };
   }
 
   async function applyFieldValue(el, value, matchKey) {
+    // 1. Aria/Radix custom radio buttons
     if (isAriaCustomRadio(el)) {
       return setAriaRadioGroupValue(el, value);
     }
     const tag = el.tagName?.toLowerCase();
     const type = (el.type || "").toLowerCase();
+    // 2. Native radio inside a custom radiogroup — delegate to aria handler
     if (tag === "input" && type === "radio") {
       const rg = el.closest('[role="radiogroup"]');
       if (rg && rg.querySelector('[role="radio"]:not(input)')) {
@@ -575,12 +1255,34 @@
         return setAriaRadioGroupValue(first, value);
       }
     }
+
+    // 3. Site-specific dropdown handler (try first for recognized sites)
+    const siteHandlers = window.JobAutofillSiteHandlers;
+    if (siteHandlers && isGenericCustomDropdown(el)) {
+      const handler = siteHandlers.detectSiteHandler();
+      if (handler) {
+        const result = await siteHandlers.siteSpecificDropdownFill(el, String(value || "").trim(), scoreChoiceMatch);
+        if (result.warning) addFillWarning(result.warning);
+        if (result.filled) {
+          dispatchFieldEvents(el, value);
+          return result.prior;
+        }
+        // Site handler didn't find a match — fall through to generic logic
+      }
+    }
+
+    // 4. Workday-specific dropdown/combobox paths
     if (isWorkdayDropdownTrigger(el)) {
       return setWorkdayStyleChoiceControl(el, value);
     }
     if (shouldUseWorkdayComboboxFill(el, matchKey)) {
       return setWorkdayComboboxFromInput(el, value);
     }
+    // 5. Generic custom dropdown fallback
+    if (isGenericCustomDropdown(el)) {
+      return openAndPickDropdownOption(el, value);
+    }
+    // 6. Standard native controls (input, select, textarea, contenteditable)
     return setFieldValue(el, value);
   }
 
@@ -617,18 +1319,37 @@
     return hit ? hit.value : "";
   }
 
+  /**
+   * Walk the DOM around a hidden native radio to find the visible element that
+   * a real user would click.  Walk up to 5 ancestors.
+   */
   function findClickableForRadio(input) {
     if (!input) return null;
-    const label = input.id ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`) : null;
-    if (label) return label;
+    // 1. Explicit <label for="id">
+    if (input.id) {
+      const lab = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+      if (lab) return lab;
+    }
+    // 2. Wrapping <label>
     const wrap = input.closest("label");
     if (wrap) return wrap;
-    const parent = input.parentElement;
-    if (parent) {
-      const btn = parent.querySelector('[role="radio"], button, [data-state]');
-      if (btn) return btn;
-      const sib = parent.querySelector('span, div');
-      if (sib && sib !== input) return sib;
+    // 3. Any <label> in the DOM that contains this input
+    try {
+      const allLabels = document.querySelectorAll("label");
+      for (const l of allLabels) {
+        if (l.contains(input)) return l;
+      }
+    } catch { /* ignore */ }
+    // 4. Walk parents looking for a visible, clickable container
+    let cur = input.parentElement;
+    for (let i = 0; i < 5 && cur; i += 1) {
+      const btn = cur.querySelector('[role="radio"], button, [data-state]');
+      if (btn && btn !== input) return btn;
+      try {
+        const r = cur.getBoundingClientRect();
+        if (r.width > 10 && r.height > 10 && cur.contains(input)) return cur;
+      } catch { /* ignore */ }
+      cur = cur.parentElement;
     }
     return null;
   }
@@ -640,20 +1361,19 @@
       firstInGroup.checked = true;
       return firstInGroup;
     }
-    const group = [...scope.querySelectorAll(`input[type="radio"][name="${CSS.escape(name)}"]`)];
+    const group = [...scope.querySelectorAll(`input[type="radio"][name="${CSS.escape(name)}"]`)].filter(
+      (r) => !r.disabled
+    );
     const w = String(value || "").trim();
-    let best = null;
-    let bestScore = 0;
-    for (const r of group) {
+    const scored = group.map((r) => {
       const label = labelTextForInput(r);
       const s = scoreChoiceMatch(w, r.value, label || r.getAttribute("aria-label") || "");
-      if (s > bestScore) {
-        bestScore = s;
-        best = r;
-      }
-    }
-    if (best && bestScore >= 0.35) {
-      const clickTarget = findClickableForRadio(best);
+      return { node: r, text: label || r.value, score: s };
+    }).sort((a, b) => b.score - a.score);
+
+    const best = scored[0];
+    if (best && best.score >= SAFE_MATCH_THRESHOLD) {
+      const clickTarget = findClickableForRadio(best.node);
       if (clickTarget) {
         try {
           clickTarget.scrollIntoView({ block: "center", inline: "nearest" });
@@ -664,31 +1384,28 @@
         dispatchFullPointerClick(clickTarget);
       } else {
         try {
-          best.focus?.({ preventScroll: true });
+          best.node.focus?.({ preventScroll: true });
         } catch { /* ignore */ }
-        dispatchFullPointerClick(best);
+        dispatchFullPointerClick(best.node);
       }
 
-      if (!best.checked) {
-        const checkedDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked");
-        if (checkedDesc?.set) {
-          group.forEach((r) => checkedDesc.set.call(r, r === best));
-        } else {
-          group.forEach((r) => { r.checked = r === best; });
-        }
-        best.dispatchEvent(new Event("input", { bubbles: true }));
-        best.dispatchEvent(new Event("change", { bubbles: true }));
-        best.dispatchEvent(new Event("click", { bubbles: true }));
+      if (!best.node.checked) {
+        group.forEach((r) => setNativeChecked(r, r === best.node));
+        dispatchChangeEvents(best.node);
       }
-      return best;
+      logDropdownAttempt({
+        label: name, wanted: w, fieldType: "native-radio", triggerEl: firstInGroup,
+        scored, outcome: "picked", reason: null
+      });
+      return best.node;
     }
+    addFillWarning({
+      trigger: firstInGroup, wanted: w, reason: "radio-low-confidence",
+      label: name, fieldType: "native-radio",
+      bestText: best?.text, bestScore: best?.score,
+      topCandidates: scored.slice(0, 5)
+    });
     return null;
-  }
-
-  function setNativeSelectValue(el, value) {
-    const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
-    if (descriptor?.set) descriptor.set.call(el, value);
-    else el.value = value;
   }
 
   function setFieldValue(el, value) {
@@ -704,34 +1421,53 @@
     }
 
     if (tag === "input" && type === "checkbox") {
-      el.checked = /true|yes|1/i.test(String(value));
-    } else if (tag === "input" && type === "radio") {
+      setNativeChecked(el, /true|yes|1/i.test(String(value)));
+      dispatchFieldEvents(el, value);
+      return oldValue;
+    }
+
+    if (tag === "input" && type === "radio") {
       const checkedEl = setRadioGroupValue(el, value);
       const target = checkedEl || el;
-      target.dispatchEvent(new Event("input", { bubbles: true }));
-      target.dispatchEvent(new Event("change", { bubbles: true }));
-      target.dispatchEvent(new Event("blur", { bubbles: true }));
+      dispatchFieldEvents(target, value);
       return oldValue;
-    } else if (el.isContentEditable) {
+    }
+
+    if (el.isContentEditable) {
       el.textContent = value;
-    } else if (tag === "input") {
-      if (el.type === "date") setNativeInputValue(el, formatDateValue(value, "date"));
-      else if (el.type === "month") setNativeInputValue(el, formatDateValue(value, "month"));
-      else setNativeInputValue(el, value);
-    } else if (tag === "select") {
+      dispatchFieldEvents(el, value);
+      return oldValue;
+    }
+
+    if (tag === "textarea") {
+      setNativeValue(el, value);
+      dispatchFieldEvents(el, value);
+      return oldValue;
+    }
+
+    if (tag === "input") {
+      if (type === "date") setNativeValue(el, formatDateValue(value, "date"));
+      else if (type === "month") setNativeValue(el, formatDateValue(value, "month"));
+      else setNativeValue(el, value);
+      dispatchFieldEvents(el, value);
+      return oldValue;
+    }
+
+    if (tag === "select") {
       const opt = pickBestSelectOption(el, value);
       if (opt) {
         opt.selected = true;
-        setNativeSelectValue(el, opt.value);
+        setNativeValue(el, opt.value);
       } else {
-        setNativeSelectValue(el, value);
+        setNativeValue(el, value);
       }
-    } else {
-      el.value = value;
+      dispatchFieldEvents(el, opt ? opt.value : value);
+      return oldValue;
     }
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    el.dispatchEvent(new Event("blur", { bubbles: true }));
+
+    // Fallback for any other element (contenteditable divs, etc.)
+    el.value = value;
+    dispatchFieldEvents(el, value);
     return oldValue;
   }
 
@@ -820,6 +1556,10 @@
     STATE.settings = await getStorage("settings", {});
     STATE.education = await getStorage("education", []);
     STATE.experience = await getStorage("experience", []);
+
+    // Expose devMode flag so site-handlers.js can read it for logging.
+    try { window.__jobAutofillDevMode = isDebug(); } catch { /* ignore */ }
+
     if (isHttpPage()) {
       notify("Warning: page is not encrypted (HTTP).", "warning");
     }
@@ -842,8 +1582,16 @@
       return;
     }
 
+    // Clear stale warnings from any previous fill pass.
+    drainFillWarnings();
+
+    if (isDebug()) {
+      console.group(`[AutoFill] Fill pass — ${matches.length} matched field(s)`);
+    }
+
     STATE.lastFilled = [];
     let filledCount = 0;
+    let skippedCount = 0;
     const matchedKeys = [];
     for (let index = 0; index < matches.length; index += 1) {
       const m = matches[index];
@@ -851,47 +1599,73 @@
       if (SENSITIVE_PATTERNS.test(mergedText)) continue;
       try {
         const value = preview.overrides?.[String(index)] ?? resolveMatchValue(m);
-        console.log(`[AutoFill] #${index} key="${m.key}" value="${String(value).slice(0,60)}" tag=<${m.element?.tagName}> type="${m.element?.type||""}" role="${m.element?.getAttribute("role")||""}" name="${m.element?.name||""}" id="${m.element?.id||""}" isAriaRadio=${isAriaCustomRadio(m.element)} checked=${m.element?.checked} outerHTML=${m.element?.outerHTML?.slice(0,200)}`);
-        const raw = await applyFieldValue(m.element, value, m.key);
-        console.log(`[AutoFill] #${index} result:`, raw, `element.checked now=${m.element?.checked}`);
-        if (isAriaCustomRadio(m.element) && raw == null) {
-          console.log(`[AutoFill] #${index} aria radio returned null — skipping`);
-          continue;
+        if (isDebug()) {
+          console.log(
+            `[AutoFill] #${index} key="${m.key}" value="${String(value).slice(0, 60)}"`,
+            `type=${fieldTypeLabel(m.element)}`,
+            elSummary(m.element)
+          );
         }
+        const raw = await applyFieldValue(m.element, value, m.key);
+        if (isAriaCustomRadio(m.element) && raw == null) { skippedCount += 1; continue; }
         let previous;
         let filledElement = m.element;
         if (raw && typeof raw === "object" && raw.__ariaRadio) {
           previous = raw.previous;
           filledElement = raw.target || m.element;
-          console.log(`[AutoFill] #${index} ariaRadio target:`, filledElement?.tagName, filledElement?.textContent?.slice(0,60));
         } else {
           previous = raw;
         }
-        const workday = usesWorkdaySyntheticFill(m.element, m.key);
+        const synthetic = usesSyntheticFill(m.element, m.key);
         STATE.lastFilled.push({
           element: filledElement,
           previous,
-          workday,
+          synthetic,
           ariaRadio: Boolean(raw && raw.__ariaRadio)
         });
         highlightField(filledElement);
         filledCount += 1;
         matchedKeys.push(m.key);
       } catch (_err) {
-        console.error(`[AutoFill] #${index} error:`, _err);
+        if (isDebug()) console.error(`[AutoFill] #${index} error:`, _err);
       }
     }
+
+    // Report structured warnings for any dropdowns/radios that were skipped.
+    const warnings = drainFillWarnings();
+    if (warnings.length && isDebug()) {
+      console.groupCollapsed(`[AutoFill] ${warnings.length} dropdown(s) skipped — summary`);
+      console.table(warnings.map((w) => ({
+        reason: w.reason,
+        wanted: w.wanted,
+        bestMatch: w.bestText ?? "—",
+        score: w.bestScore?.toFixed(3) ?? "—",
+        fieldType: w.fieldType ?? "—",
+        label: w.label ?? "—"
+      })));
+      console.groupEnd();
+    }
+    skippedCount += warnings.length;
+
+    if (isDebug()) {
+      console.log(`[AutoFill] Done: ${filledCount} filled, ${skippedCount} skipped`);
+      console.groupEnd();
+    }
+
     sessionStorage.setItem("jobAutofillFilledCount", String(filledCount));
     appendFillHistory(window.location.hostname, filledCount, matchedKeys);
     updateFloatingButtonsAfterFill(filledCount);
-    notify(`Filled ${filledCount} fields successfully.`, "success");
+
+    let msg = `Filled ${filledCount} fields successfully.`;
+    if (skippedCount > 0) msg += ` ${skippedCount} dropdown(s) skipped (no confident match).`;
+    notify(msg, skippedCount > 0 ? "warning" : "success");
   }
 
   function undoFill() {
     STATE.lastFilled.forEach((item) => {
       const el = item.element;
       if (!el) return;
-      if (item.workday) return;
+      if (item.synthetic) return;
       if (item.ariaRadio) {
         const rg = el.closest('[role="radiogroup"]');
         const prev = String(item.previous || "").trim();
@@ -903,30 +1677,24 @@
           );
           if (first) setAriaRadioGroupValue(first, prev);
         }
-        try {
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-        } catch {
-          /* ignore */
-        }
+        dispatchChangeEvents(el);
         return;
       }
       if (el.tagName.toLowerCase() === "input" && el.type === "checkbox") {
-        el.checked = Boolean(item.previous);
+        setNativeChecked(el, Boolean(item.previous));
       } else if (el.tagName.toLowerCase() === "input" && el.type === "radio") {
         const scope = el.form || document;
         const name = el.name;
         const prev = String(item.previous ?? "");
         [...scope.querySelectorAll(`input[type="radio"][name="${CSS.escape(name)}"]`)].forEach((r) => {
-          r.checked = r.value === prev;
+          setNativeChecked(r, r.value === prev);
         });
       } else if (el.isContentEditable) {
         el.textContent = item.previous || "";
       } else {
-        el.value = item.previous || "";
+        setNativeValue(el, item.previous || "");
       }
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
+      dispatchFieldEvents(el, item.previous || "");
     });
     notify(`Undo complete for ${STATE.lastFilled.length} fields.`, "info");
     STATE.lastFilled = [];
@@ -1123,4 +1891,16 @@
   });
 
   void initState().catch(() => {});
+
+  // Expose console helpers so users can toggle debug without the settings UI.
+  window.enableAutofillDebug = () => {
+    window.__autofillDebug = true;
+    try { window.__jobAutofillDevMode = true; } catch { /* ignore */ }
+    console.log("[AutoFill] Debug mode ON — run Fill again to see diagnostics.");
+  };
+  window.disableAutofillDebug = () => {
+    window.__autofillDebug = false;
+    try { window.__jobAutofillDevMode = false; } catch { /* ignore */ }
+    console.log("[AutoFill] Debug mode OFF.");
+  };
 })();

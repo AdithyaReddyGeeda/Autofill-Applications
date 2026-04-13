@@ -213,8 +213,8 @@
     const type = (meta.type || "").toLowerCase();
     if (tag === "select") return true;
     if (tag === "input" && type === "radio") return true;
-    if ((meta.role || "").toLowerCase() === "radio") return true;
-    if ((meta.role || "").toLowerCase() === "combobox") return true;
+    const role = (meta.role || "").toLowerCase();
+    if (role === "radio" || role === "combobox" || role === "listbox") return true;
     const aid = String(meta.automationId || "");
     if (/selectWidget|dropdown/i.test(aid)) return true;
     return false;

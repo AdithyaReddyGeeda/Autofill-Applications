@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test: Custom Combobox Dropdowns</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+  .field { margin-bottom: 24px; position: relative; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 0.9rem; }
+  .hint { font-size: 0.78rem; color: #6b7280; margin-bottom: 4px; }
+
+  /* Combobox trigger */
+  .combo-trigger {
+    width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px;
+    font-size: 0.95rem; background: #fff; cursor: pointer; text-align: left;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .combo-trigger:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  .combo-trigger::after { content: "▾"; margin-left: 8px; color: #9ca3af; }
+  .combo-trigger[aria-expanded="true"]::after { content: "▴"; }
+
+  /* Listbox */
+  .combo-listbox {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px;
+    background: #fff; border: 1px solid #d1d5db; border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.1); z-index: 10; max-height: 200px; overflow-y: auto;
+    list-style: none; padding: 4px 0; margin: 0;
+  }
+  .combo-listbox[data-open="true"] { display: block; }
+  .combo-listbox [role="option"] {
+    padding: 8px 12px; cursor: pointer; font-size: 0.9rem;
+  }
+  .combo-listbox [role="option"]:hover,
+  .combo-listbox [role="option"][aria-selected="true"] { background: #eff6ff; color: #1d4ed8; }
+  .combo-listbox [role="option"][aria-disabled="true"] { opacity: .4; cursor: default; }
+
+  /* Radio group */
+  .radio-group { display: flex; flex-direction: column; gap: 6px; }
+  .radio-option {
+    padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px;
+    cursor: pointer; font-size: 0.9rem; transition: all .15s;
+  }
+  .radio-option:hover { border-color: #3b82f6; }
+  .radio-option[aria-checked="true"] { background: #eff6ff; border-color: #3b82f6; color: #1d4ed8; font-weight: 600; }
+  .radio-option:focus { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+
+  input[type="text"] { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; }
+  input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  #log { margin-top: 30px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.82rem; font-family: monospace; white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>Custom Combobox &amp; Aria Radio Dropdowns</h1>
+<p>Simulates ARIA comboboxes and radio groups like those used by Greenhouse, Ashby, and Lever.</p>
+
+<form id="form">
+  <div class="field">
+    <label for="name-input">Full Name</label>
+    <input type="text" id="name-input" name="full_name" placeholder="Your name">
+  </div>
+
+  <div class="field">
+    <label for="email-input">Email</label>
+    <input type="email" id="email-input" name="email" placeholder="you@example.com">
+  </div>
+
+  <!-- ARIA Combobox: country -->
+  <div class="field" id="country-field">
+    <label id="country-label">Country</label>
+    <button type="button" class="combo-trigger"
+            role="combobox"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="country-label"
+            aria-controls="country-listbox"
+            id="country-trigger">
+      <span class="combo-value">Select a country</span>
+    </button>
+    <ul role="listbox" id="country-listbox" class="combo-listbox" aria-labelledby="country-label">
+      <li role="option" data-value="US">United States</li>
+      <li role="option" data-value="CA">Canada</li>
+      <li role="option" data-value="GB">United Kingdom</li>
+      <li role="option" data-value="DE">Germany</li>
+      <li role="option" data-value="IN">India</li>
+      <li role="option" data-value="AU">Australia</li>
+    </ul>
+  </div>
+
+  <!-- ARIA Combobox: gender (EEO) -->
+  <div class="field" id="gender-field">
+    <label id="gender-label">Gender</label>
+    <div class="hint">EEO field — custom combobox.</div>
+    <button type="button" class="combo-trigger"
+            role="combobox"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="gender-label"
+            aria-controls="gender-listbox"
+            id="gender-trigger">
+      <span class="combo-value">Select...</span>
+    </button>
+    <ul role="listbox" id="gender-listbox" class="combo-listbox" aria-labelledby="gender-label">
+      <li role="option" data-value="male">Male</li>
+      <li role="option" data-value="female">Female</li>
+      <li role="option" data-value="nonbinary">Non-binary</li>
+      <li role="option" data-value="decline">Prefer not to say</li>
+    </ul>
+  </div>
+
+  <!-- ARIA Radio Group: veteran status (EEO) -->
+  <div class="field">
+    <label id="veteran-label">Veteran Status</label>
+    <div class="hint">EEO field — custom ARIA radio group (Ashby / Radix style).</div>
+    <div role="radiogroup" aria-labelledby="veteran-label" id="veteran-group" class="radio-group">
+      <div role="radio" tabindex="0" aria-checked="false" data-value="not_veteran">I am not a protected veteran</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="veteran">I identify as one or more of the classifications of a protected veteran</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="decline">I don't wish to answer</div>
+    </div>
+  </div>
+
+  <!-- ARIA Radio Group: disability (EEO) -->
+  <div class="field">
+    <label id="disability-label">Disability Status</label>
+    <div class="hint">EEO field — custom ARIA radio group.</div>
+    <div role="radiogroup" aria-labelledby="disability-label" id="disability-group" class="radio-group">
+      <div role="radio" tabindex="0" aria-checked="false" data-value="yes">Yes, I have a disability (or previously had a disability)</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="no">No, I don't have a disability</div>
+      <div role="radio" tabindex="0" aria-checked="false" data-value="decline">I don't wish to answer</div>
+    </div>
+  </div>
+
+  <!-- Combobox with disabled option -->
+  <div class="field" id="restricted-field">
+    <label id="restricted-label">Restricted Test</label>
+    <div class="hint">One option is disabled — autofill should not pick it.</div>
+    <button type="button" class="combo-trigger"
+            role="combobox"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="restricted-label"
+            aria-controls="restricted-listbox"
+            id="restricted-trigger">
+      <span class="combo-value">Choose...</span>
+    </button>
+    <ul role="listbox" id="restricted-listbox" class="combo-listbox" aria-labelledby="restricted-label">
+      <li role="option" aria-disabled="true" data-value="a">Option A (disabled)</li>
+      <li role="option" data-value="b">Option B</li>
+      <li role="option" data-value="c">Option C</li>
+    </ul>
+  </div>
+</form>
+
+<div id="log">Event log:
+</div>
+
+<script>
+  const log = document.getElementById("log");
+  function logEvent(msg) {
+    log.textContent += msg + "\n";
+    log.scrollTop = log.scrollHeight;
+  }
+
+  // Wire up combobox triggers
+  document.querySelectorAll(".combo-trigger").forEach((trigger) => {
+    const listbox = document.getElementById(trigger.getAttribute("aria-controls"));
+    if (!listbox) return;
+
+    trigger.addEventListener("click", () => {
+      const open = trigger.getAttribute("aria-expanded") === "true";
+      trigger.setAttribute("aria-expanded", String(!open));
+      listbox.setAttribute("data-open", String(!open));
+    });
+
+    listbox.querySelectorAll('[role="option"]').forEach((opt) => {
+      opt.addEventListener("click", () => {
+        if (opt.getAttribute("aria-disabled") === "true") return;
+        listbox.querySelectorAll('[role="option"]').forEach((o) => o.removeAttribute("aria-selected"));
+        opt.setAttribute("aria-selected", "true");
+        trigger.querySelector(".combo-value").textContent = opt.textContent;
+        trigger.setAttribute("aria-expanded", "false");
+        listbox.setAttribute("data-open", "false");
+        logEvent(`combobox → ${trigger.id}: "${opt.textContent}" (value="${opt.dataset.value}")`);
+      });
+    });
+  });
+
+  // Close comboboxes on outside click
+  document.addEventListener("click", (e) => {
+    document.querySelectorAll(".combo-trigger[aria-expanded='true']").forEach((t) => {
+      if (!t.parentElement.contains(e.target)) {
+        t.setAttribute("aria-expanded", "false");
+        const lb = document.getElementById(t.getAttribute("aria-controls"));
+        if (lb) lb.setAttribute("data-open", "false");
+      }
+    });
+  });
+
+  // Wire up radio groups
+  document.querySelectorAll('[role="radiogroup"]').forEach((rg) => {
+    rg.querySelectorAll('[role="radio"]').forEach((radio) => {
+      radio.addEventListener("click", () => {
+        rg.querySelectorAll('[role="radio"]').forEach((r) => {
+          r.setAttribute("aria-checked", "false");
+          r.classList.remove("checked");
+        });
+        radio.setAttribute("aria-checked", "true");
+        radio.classList.add("checked");
+        logEvent(`radio → ${rg.id}: "${radio.textContent.trim().slice(0, 60)}"`);
+      });
+    });
+  });
+
+  // Log input/change events on all form controls
+  document.getElementById("form").addEventListener("input", (e) => {
+    logEvent(`input  → ${e.target.name || e.target.id}: "${e.target.value}"`);
+  });
+  document.getElementById("form").addEventListener("change", (e) => {
+    logEvent(`change → ${e.target.name || e.target.id}: "${e.target.value}"`);
+  });
+</script>
+</body>
+</html>

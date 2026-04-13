@@ -82,14 +82,26 @@
     };
   }
 
+  /** True when el is a custom-dropdown trigger (combobox, aria-haspopup, etc.) but NOT a native <select>. */
+  function isCustomDropdownTrigger(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    if (role === "combobox" || role === "listbox") return true;
+    const popup = (el.getAttribute("aria-haspopup") || "").toLowerCase();
+    if (popup === "listbox" || popup === "true") return true;
+    const aid = el.getAttribute("data-automation-id") || "";
+    if (aid === "selectWidget" || /dropdown/i.test(aid)) return true;
+    const tag = el.tagName?.toLowerCase();
+    if (tag === "div" && el.id && el.id.includes("dropDownSelectList")) return true;
+    return false;
+  }
+
   function isCandidateField(el) {
     if (!el || el.disabled) return false;
     const tag = el.tagName?.toLowerCase();
     const type = (el.type || "").toLowerCase();
     if (type === "hidden") return false;
-    const aid = el.getAttribute("data-automation-id");
-    if (aid === "selectWidget") return true;
-    if (tag === "div" && el.id && el.id.includes("dropDownSelectList")) return true;
+    if (isCustomDropdownTrigger(el)) return true;
     if (tag === "select") return true;
 
     let style;
@@ -99,7 +111,6 @@
       return false;
     }
 
-    // Ashby / Greenhouse / many React apps hide the native control (visibility:hidden, 0×0) and style a sibling.
     if (tag === "input" && (type === "radio" || type === "checkbox")) {
       if (style.display === "none") return false;
       return el.isConnected;
@@ -228,11 +239,8 @@
     if (tag === "select") return true;
     if (tag === "input" && type === "radio") return true;
     if (isAriaCustomRadio(el)) return true;
-    const aid = el.getAttribute("data-automation-id") || "";
-    if (aid === "selectWidget") return true;
-    if (tag === "div" && el.id && el.id.includes("dropDownSelectList")) return true;
-    if (tag === "input" && el.getAttribute("role") === "combobox") return true;
-    if (tag === "input" && /\b(dropdown|multiselect|select|prompt|list)\b/i.test(aid)) return true;
+    if (isCustomDropdownTrigger(el)) return true;
+    if (tag === "input" && /\b(dropdown|multiselect|select|prompt|list)\b/i.test(el.getAttribute("data-automation-id") || "")) return true;
     return false;
   }
 
@@ -266,6 +274,7 @@
 
   window.JobAutofillDetector = {
     detectAndMatch,
-    queryCandidateFields
+    queryCandidateFields,
+    isCustomDropdownTrigger
   };
 })();

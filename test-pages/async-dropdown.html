@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test: Async-Rendered Dropdowns</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
+  .field { margin-bottom: 24px; position: relative; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 0.9rem; }
+  .hint { font-size: 0.78rem; color: #6b7280; margin-bottom: 4px; }
+
+  .trigger-btn {
+    width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px;
+    font-size: 0.95rem; background: #fff; cursor: pointer; text-align: left;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .trigger-btn:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  .trigger-btn::after { content: "▾"; color: #9ca3af; }
+  .trigger-btn[aria-expanded="true"]::after { content: "▴"; }
+
+  .async-menu {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px;
+    background: #fff; border: 1px solid #d1d5db; border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.1); z-index: 10; max-height: 220px; overflow-y: auto;
+    padding: 4px 0;
+  }
+  .async-menu.open { display: block; }
+  .async-menu .loading { padding: 12px; color: #6b7280; font-size: 0.85rem; text-align: center; }
+  .async-menu [role="option"] {
+    padding: 8px 12px; cursor: pointer; font-size: 0.9rem; list-style: none;
+  }
+  .async-menu [role="option"]:hover { background: #eff6ff; color: #1d4ed8; }
+
+  input[type="text"], input[type="email"] {
+    width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem;
+  }
+  input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+
+  /* Typeahead combobox */
+  .typeahead-wrap { position: relative; }
+  .typeahead-wrap input { width: 100%; }
+  .typeahead-results {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px;
+    background: #fff; border: 1px solid #d1d5db; border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.1); z-index: 10; max-height: 200px; overflow-y: auto;
+    padding: 4px 0; list-style: none; margin: 0;
+  }
+  .typeahead-results.open { display: block; }
+  .typeahead-results [role="option"] { padding: 8px 12px; cursor: pointer; font-size: 0.9rem; }
+  .typeahead-results [role="option"]:hover { background: #eff6ff; color: #1d4ed8; }
+
+  #log { margin-top: 30px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.82rem; font-family: monospace; white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>Async-Rendered Dropdowns</h1>
+<p>Options appear <strong>after a delay</strong> when the trigger is clicked, simulating server-fetched menus like Workday and LinkedIn typeaheads.</p>
+
+<form id="form">
+  <div class="field">
+    <label for="name-input">Full Name</label>
+    <input type="text" id="name-input" name="full_name" placeholder="Your name">
+  </div>
+
+  <!-- Async combobox: country (options load after 400ms) -->
+  <div class="field" id="country-field">
+    <label id="country-label">Country (async load — 400 ms delay)</label>
+    <div class="hint">Options render after click; autofill must wait for them.</div>
+    <button type="button" class="trigger-btn"
+            role="combobox"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="country-label"
+            aria-controls="country-menu"
+            id="country-trigger">
+      <span class="combo-value">Select a country</span>
+    </button>
+    <div id="country-menu" class="async-menu" role="listbox" aria-labelledby="country-label"></div>
+  </div>
+
+  <!-- Async combobox: race/ethnicity (options load after 600ms) -->
+  <div class="field" id="race-field">
+    <label id="race-label">Race / Ethnicity (async load — 600 ms delay)</label>
+    <div class="hint">EEO field — slow-loading options.</div>
+    <button type="button" class="trigger-btn"
+            role="combobox"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="race-label"
+            aria-controls="race-menu"
+            id="race-trigger">
+      <span class="combo-value">Select...</span>
+    </button>
+    <div id="race-menu" class="async-menu" role="listbox" aria-labelledby="race-label"></div>
+  </div>
+
+  <!-- Typeahead input combobox: location (results appear after typing + 300ms) -->
+  <div class="field">
+    <label for="location-input">Location (typeahead — 300 ms debounce)</label>
+    <div class="hint">Type at least 2 characters; results appear after a delay.</div>
+    <div class="typeahead-wrap">
+      <input type="text" id="location-input" name="location" placeholder="Start typing a city..."
+             role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="location-results"
+             autocomplete="off">
+      <ul id="location-results" class="typeahead-results" role="listbox"></ul>
+    </div>
+  </div>
+</form>
+
+<div id="log">Event log:
+</div>
+
+<script>
+  const log = document.getElementById("log");
+  function logEvent(msg) {
+    log.textContent += msg + "\n";
+    log.scrollTop = log.scrollHeight;
+  }
+
+  // --- Async button combobox ---
+  const asyncConfigs = [
+    {
+      triggerId: "country-trigger",
+      menuId: "country-menu",
+      delay: 400,
+      options: [
+        { value: "US", text: "United States" },
+        { value: "CA", text: "Canada" },
+        { value: "GB", text: "United Kingdom" },
+        { value: "DE", text: "Germany" },
+        { value: "IN", text: "India" },
+        { value: "AU", text: "Australia" },
+        { value: "JP", text: "Japan" },
+        { value: "BR", text: "Brazil" }
+      ]
+    },
+    {
+      triggerId: "race-trigger",
+      menuId: "race-menu",
+      delay: 600,
+      options: [
+        { value: "hispanic", text: "Hispanic or Latino" },
+        { value: "white", text: "White (Not Hispanic or Latino)" },
+        { value: "black", text: "Black or African American" },
+        { value: "asian", text: "Asian" },
+        { value: "native", text: "American Indian or Alaska Native" },
+        { value: "pacific", text: "Native Hawaiian or Other Pacific Islander" },
+        { value: "two", text: "Two or More Races" },
+        { value: "decline", text: "Decline to self-identify" }
+      ]
+    }
+  ];
+
+  for (const cfg of asyncConfigs) {
+    const trigger = document.getElementById(cfg.triggerId);
+    const menu = document.getElementById(cfg.menuId);
+    let loaded = false;
+
+    trigger.addEventListener("click", () => {
+      const isOpen = trigger.getAttribute("aria-expanded") === "true";
+      if (isOpen) {
+        trigger.setAttribute("aria-expanded", "false");
+        menu.classList.remove("open");
+        return;
+      }
+      trigger.setAttribute("aria-expanded", "true");
+      menu.classList.add("open");
+
+      if (!loaded) {
+        menu.innerHTML = '<div class="loading">Loading…</div>';
+        setTimeout(() => {
+          menu.innerHTML = "";
+          for (const opt of cfg.options) {
+            const el = document.createElement("div");
+            el.setAttribute("role", "option");
+            el.setAttribute("data-value", opt.value);
+            el.textContent = opt.text;
+            el.addEventListener("click", () => {
+              trigger.querySelector(".combo-value").textContent = opt.text;
+              trigger.setAttribute("aria-expanded", "false");
+              menu.classList.remove("open");
+              logEvent(`async-combo → ${cfg.triggerId}: "${opt.text}" (value="${opt.value}")`);
+            });
+            menu.appendChild(el);
+          }
+          loaded = true;
+          logEvent(`async-combo: ${cfg.triggerId} options rendered (${cfg.delay}ms)`);
+        }, cfg.delay);
+      }
+    });
+  }
+
+  // Close menus on outside click
+  document.addEventListener("click", (e) => {
+    for (const cfg of asyncConfigs) {
+      const trigger = document.getElementById(cfg.triggerId);
+      const menu = document.getElementById(cfg.menuId);
+      if (!trigger.parentElement.contains(e.target)) {
+        trigger.setAttribute("aria-expanded", "false");
+        menu.classList.remove("open");
+      }
+    }
+  });
+
+  // --- Typeahead input combobox ---
+  const locationInput = document.getElementById("location-input");
+  const locationResults = document.getElementById("location-results");
+  const allCities = [
+    "New York, NY", "Los Angeles, CA", "Chicago, IL", "Houston, TX",
+    "Phoenix, AZ", "San Francisco, CA", "Seattle, WA", "Austin, TX",
+    "Denver, CO", "Boston, MA", "Atlanta, GA", "Dallas, TX",
+    "San Diego, CA", "Portland, OR", "Miami, FL", "Remote"
+  ];
+  let typeaheadTimer = null;
+
+  locationInput.addEventListener("input", () => {
+    clearTimeout(typeaheadTimer);
+    const q = locationInput.value.trim().toLowerCase();
+    if (q.length < 2) {
+      locationResults.classList.remove("open");
+      locationInput.setAttribute("aria-expanded", "false");
+      return;
+    }
+    typeaheadTimer = setTimeout(() => {
+      const matches = allCities.filter((c) => c.toLowerCase().includes(q));
+      locationResults.innerHTML = "";
+      if (!matches.length) {
+        locationResults.classList.remove("open");
+        locationInput.setAttribute("aria-expanded", "false");
+        return;
+      }
+      for (const city of matches) {
+        const li = document.createElement("li");
+        li.setAttribute("role", "option");
+        li.textContent = city;
+        li.addEventListener("click", () => {
+          locationInput.value = city;
+          locationResults.classList.remove("open");
+          locationInput.setAttribute("aria-expanded", "false");
+          locationInput.dispatchEvent(new Event("change", { bubbles: true }));
+          logEvent(`typeahead → location: "${city}"`);
+        });
+        locationResults.appendChild(li);
+      }
+      locationResults.classList.add("open");
+      locationInput.setAttribute("aria-expanded", "true");
+      logEvent(`typeahead: ${matches.length} results for "${q}"`);
+    }, 300);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!locationInput.parentElement.contains(e.target)) {
+      locationResults.classList.remove("open");
+      locationInput.setAttribute("aria-expanded", "false");
+    }
+  });
+
+  // General form event logging
+  document.getElementById("form").addEventListener("change", (e) => {
+    if (e.target.closest(".typeahead-wrap") || e.target.closest(".async-menu")) return;
+    logEvent(`change → ${e.target.name || e.target.id}: "${e.target.value}"`);
+  });
+</script>
+</body>
+</html>
