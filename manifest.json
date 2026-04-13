@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Job Application Auto Fill",
+  "description": "Securely auto-fill job applications with locally stored profile data.",
+  "version": "0.1.0",
+  "permissions": ["storage", "activeTab", "scripting", "contextMenus", "notifications", "webNavigation", "sidePanel"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "Job Auto Fill — open side panel"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "minimum_chrome_version": "114",
+  "options_page": "popup-settings.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "trigger-fill": {
+      "suggested_key": {
+        "default": "Alt+Shift+F"
+      },
+      "description": "Fill form with saved details"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["field-config.js", "data-matcher.js", "form-detector.js", "content-script.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["styles.css", "lib/pdf.min.js", "lib/pdf.worker.min.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

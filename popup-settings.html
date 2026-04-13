@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Job Auto Fill Settings</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="settings-body">
+    <main class="panel settings settings-main">
+      <h1>Settings</h1>
+      <p id="profileCompletion" class="status">Profile 0% complete</p>
+      <form id="profileForm">
+        <label>First Name <input name="first_name" /></label>
+        <label>Last Name <input name="last_name" /></label>
+        <label>Email <input name="email" type="email" /></label>
+        <label>Phone (full number, for simple forms) <input name="phone" placeholder="+1 832 705 4124" /></label>
+
+        <section class="card">
+          <h2>Address &amp; phone (split fields)</h2>
+          <p class="status">
+            For applications that ask for address lines, city/state/ZIP, and phone device type / country code / number separately. Use the
+            <strong>same labels</strong> the employer shows for dropdowns (e.g. state, device type).
+          </p>
+          <label>Address line 1 <input name="address_line1" placeholder="Street, PO Box, etc." /></label>
+          <label>Address line 2 <input name="address_line2" placeholder="Apt, suite, unit (optional)" /></label>
+          <label>City <input name="city" /></label>
+          <label>State / Province <input name="state" placeholder="e.g. TX — match portal dropdown if present" /></label>
+          <label>Postal / ZIP code <input name="postal_code" /></label>
+          <label
+            >Phone device type
+            <select name="phone_device_type">
+              <option value="">—</option>
+              <option value="Mobile">Mobile</option>
+              <option value="Work">Work</option>
+              <option value="Home">Home</option>
+              <option value="Other">Other</option>
+            </select></label
+          >
+          <label>Country phone code <input name="phone_country_code" placeholder="+1 or United States of America (+1)" /></label>
+          <label>Phone number (no country code) <input name="phone_local" placeholder="8327054124" /></label>
+          <label>Phone extension <input name="phone_extension" placeholder="optional" /></label>
+        </section>
+
+        <label>LinkedIn URL <input name="linkedin" /></label>
+        <label>GitHub URL <input name="github" /></label>
+        <label>Portfolio URL <input name="portfolio" /></label>
+        <label>Location <input name="location" /></label>
+        <label>Country (if the form asks separately) <input name="country" placeholder="e.g. United States" /></label>
+        <label>Salary Expectations <input name="salary_expectations" placeholder="e.g. 8000 USD/month" /></label>
+        <label
+          >Salary pay period (Hourly / Monthly / etc.)
+          <select name="salary_pay_period">
+            <option value="">—</option>
+            <option value="Hourly">Hourly</option>
+            <option value="Monthly">Monthly</option>
+            <option value="Annually">Annually</option>
+          </select></label
+        >
+        <label>Start Date Availability <input name="start_date_availability" /></label>
+        <label>Date of Birth <input name="date_of_birth" /></label>
+        <label>Pronouns <input name="pronouns" /></label>
+        <label>Work Authorization <input name="work_authorization" placeholder="e.g. US Citizen, Green Card" /></label>
+        <label
+          >Requires visa sponsorship now or in the future?
+          <select name="requires_sponsorship">
+            <option value="">—</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select></label
+        >
+        <label
+          >Willing to relocate?
+          <select name="willing_to_relocate">
+            <option value="">—</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select></label
+        >
+        <label>Target role (for <code>{{role}}</code> in letters) <input name="target_role" /></label>
+
+        <section class="card">
+          <h2>Extra application answers</h2>
+          <p class="status">
+            For custom employer questions (CEFR English, SQL, data viz years, etc.). Use the <strong>exact</strong> wording the portal shows for dropdowns.
+          </p>
+          <label>Conversational English / CEFR level <input name="english_proficiency" placeholder="e.g. B1: Intermediate" /></label>
+          <label>Who contacted you first / referral name <input name="referral_contact" placeholder="e.g. Recruiter name" /></label>
+          <label>Years in this role type (e.g. Data Analyst) <input name="years_role_experience" placeholder="e.g. 3" /></label>
+          <label>SQL experience (time / description) <input name="sql_experience_text" placeholder="e.g. 4 years, daily in work" /></label>
+          <label>Years with data visualization tools <input name="data_viz_years" placeholder="e.g. 2" /></label>
+        </section>
+
+        <section class="card">
+          <h2>EEO &amp; diversity</h2>
+          <p class="status">These are saved as the exact option text used by Greenhouse, Lever, and most job portals.</p>
+
+          <label>Gender
+            <select name="eeo_gender">
+              <option value="">— prefer not to answer —</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Decline to self-identify">Decline to self-identify</option>
+            </select>
+          </label>
+
+          <label>Race / Ethnicity
+            <select name="eeo_race_ethnicity">
+              <option value="">— prefer not to answer —</option>
+              <option value="Hispanic or Latino">Hispanic or Latino</option>
+              <option value="White (Not Hispanic or Latino)">White (Not Hispanic or Latino)</option>
+              <option value="Black or African American (Not Hispanic or Latino)">Black or African American (Not Hispanic or Latino)</option>
+              <option value="Native Hawaiian or Other Pacific Islander (Not Hispanic or Latino)">Native Hawaiian or Other Pacific Islander (Not Hispanic or Latino)</option>
+              <option value="Asian (Not Hispanic or Latino)">Asian (Not Hispanic or Latino)</option>
+              <option value="American Indian or Alaska Native (Not Hispanic or Latino)">American Indian or Alaska Native (Not Hispanic or Latino)</option>
+              <option value="Two or More Races (Not Hispanic or Latino)">Two or More Races (Not Hispanic or Latino)</option>
+              <option value="Decline to self-identify">Decline to self-identify</option>
+            </select>
+          </label>
+
+          <label>Veteran Status
+            <select name="eeo_veteran">
+              <option value="">— prefer not to answer —</option>
+              <option value="I am not a protected veteran">I am not a protected veteran</option>
+              <option value="I identify as one or more of the classifications of protected veteran listed above">I identify as one or more of the classifications of protected veteran listed above</option>
+              <option value="I decline to self-identify for protected veteran status">I decline to self-identify for protected veteran status</option>
+            </select>
+          </label>
+
+          <label>Disability Status
+            <select name="eeo_disability">
+              <option value="">— prefer not to answer —</option>
+              <option value="No, I don't have a disability and have not had one in the past">No, I don't have a disability and have not had one in the past</option>
+              <option value="Yes, I have a disability, or have had one in the past">Yes, I have a disability, or have had one in the past</option>
+              <option value="I do not want to answer">I do not want to answer</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="card">
+          <h2>Education</h2>
+          <label>Institution <input type="text" id="eduInstitution" /></label>
+          <label>Degree <input type="text" id="eduDegree" /></label>
+          <label>Field of Study <input type="text" id="eduFieldOfStudy" /></label>
+          <label>Start Year <input type="number" id="eduStartYear" min="1950" max="2100" /></label>
+          <label>End Year <input type="number" id="eduEndYear" min="1950" max="2100" /></label>
+          <label><input type="checkbox" id="eduPresent" /> Present (still enrolled)</label>
+          <label>GPA (optional) <input type="text" id="eduGpa" /></label>
+          <button type="button" id="addEducationBtn">Add Education</button>
+          <div id="educationList" class="status entry-list"></div>
+        </section>
+
+        <section class="card">
+          <h2>Experience</h2>
+          <label>Company <input type="text" id="expCompany" /></label>
+          <label>Title / Role <input type="text" id="expTitle" /></label>
+          <label>Start <input type="month" id="expStartDate" /></label>
+          <label>End <input type="month" id="expEndDate" /></label>
+          <label><input type="checkbox" id="expCurrent" /> Current role</label>
+          <label>Description <textarea id="expDescription"></textarea></label>
+          <button type="button" id="addExperienceBtn">Add Experience</button>
+          <div id="experienceList" class="status entry-list"></div>
+        </section>
+
+        <label>Skills (comma-separated) <textarea name="skills"></textarea></label>
+        <label>Resume Text <textarea name="resume_text"></textarea></label>
+        <label>Cover Letter Template <textarea name="cover_letter"></textarea></label>
+        <p class="status">Placeholders: <code>{{name}}</code>, <code>{{email}}</code>, <code>{{role}}</code> (role uses Target role below)</p>
+      </form>
+
+      <section class="card">
+        <h2>Resumes</h2>
+        <label>Upload PDF Resume <input type="file" id="resumePdfInput" accept="application/pdf" /></label>
+        <label>Name <input id="resumeName" /></label>
+        <label>Role Tag <input id="resumeRoleTag" /></label>
+        <label>Text <textarea id="resumeText"></textarea></label>
+        <label>Cover Letter <textarea id="resumeCoverLetter"></textarea></label>
+        <button id="addResumeBtn">Add Resume</button>
+        <div id="resumeList" class="status entry-list"></div>
+      </section>
+
+      <section class="card">
+        <h2>Behavior</h2>
+        <label><input type="checkbox" id="dryRunMode" /> Enable dry-run by default</label>
+        <label><input type="checkbox" id="devMode" /> Enable dev logging</label>
+        <label>Match Sensitivity <input type="number" id="matchThreshold" min="0.1" max="0.9" step="0.05" /></label>
+      </section>
+
+      <section class="card">
+        <h2>PIN Lock</h2>
+        <label><input type="checkbox" id="pinEnabled" /> Require PIN for popup</label>
+        <label>PIN <input id="pinCode" type="password" maxlength="20" /></label>
+        <button id="savePinBtn">Save PIN</button>
+      </section>
+
+      <section class="row">
+        <button id="exportProfileBtn" type="button" class="secondary">Export Profile</button>
+        <button id="importProfileBtn" type="button" class="secondary">Import Profile</button>
+        <input id="importProfileInput" type="file" accept="application/json" class="hidden" />
+        <button id="clearDataBtn" class="danger">Clear All Data</button>
+      </section>
+    </main>
+
+    <footer class="settings-footer">
+      <button type="button" id="saveProfileBtn">Save Profile</button>
+      <span id="settingsStatus" class="status"></span>
+    </footer>
+
+    <script src="lib/pdf.min.js"></script>
+    <script src="popup-settings.js"></script>
+  </body>
+</html>

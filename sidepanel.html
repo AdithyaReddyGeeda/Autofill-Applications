@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Job Auto Fill</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="side-panel-body">
+    <main class="panel side-panel">
+      <h1>Job Auto Fill</h1>
+      <div id="pinGate" class="card hidden">
+        <label for="pinInput">Enter PIN</label>
+        <input id="pinInput" type="password" />
+        <button id="unlockBtn">Unlock</button>
+      </div>
+
+      <section id="appContent">
+        <div class="row">
+          <button id="fillNowBtn">Fill Now (⌥⇧F)</button>
+          <button id="dryRunBtn" class="secondary">Dry Run</button>
+          <button id="undoBtn" class="secondary">Undo</button>
+        </div>
+        <div class="row">
+          <label for="activeResumeSelect">Active Resume</label>
+          <select id="activeResumeSelect">
+            <option value="">Use profile defaults</option>
+          </select>
+        </div>
+        <div class="row">
+          <button id="openSettingsBtn" class="secondary">Settings</button>
+          <button id="reportLayoutBtn" class="secondary">Report Layout</button>
+        </div>
+        <section class="card">
+          <h2>History</h2>
+          <div id="historyList" class="status">No fill history yet.</div>
+        </section>
+        <section class="card">
+          <div class="row">
+            <h2 style="margin:0;">Site Reports</h2>
+            <button id="clearReportsBtn" class="secondary">Clear Reports</button>
+          </div>
+          <div id="reportsList" class="status">No site reports yet.</div>
+        </section>
+        <p id="statusText" class="status"></p>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
