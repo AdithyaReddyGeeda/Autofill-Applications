@@ -1,6 +1,6 @@
 (() => {
   const TOKEN_MAP = {
-    full_name: ["name", "full name"],
+    full_name: ["full name", "legal name", "complete name"],
     first_name: ["first name", "given name", "first"],
     last_name: ["last name", "surname", "family name", "last"],
     email: ["email", "e-mail", "email address"],
@@ -306,12 +306,34 @@
   function scoreField(meta, profile, threshold = 0.38) {
     const isChoice = metaIsChoiceLike(meta);
     const metaText = metadataToText(meta, isChoice);
+
+    // Hard disambiguation: when the label unambiguously says "first name",
+    // "last name", or "full name", skip the fuzzy tournament entirely.
+    if (/\bfirst name\b|\bgiven name\b/.test(metaText)) {
+      const value = resolveValue("first_name", profile, metaText);
+      if (value) return { key: "first_name", value: String(value), confidence: 1 };
+    }
+    if (/\blast name\b|\bsurname\b|\bfamily name\b/.test(metaText)) {
+      const value = resolveValue("last_name", profile, metaText);
+      if (value) return { key: "last_name", value: String(value), confidence: 1 };
+    }
+    if (/\bfull name\b|\blegal name\b|\bcomplete name\b/.test(metaText)) {
+      const value = resolveValue("full_name", profile, metaText);
+      if (value) return { key: "full_name", value: String(value), confidence: 1 };
+    }
+
     const candidates = [];
 
     Object.keys(TOKEN_MAP).forEach((key) => {
       const value = resolveValue(key, profile, metaText);
       if (value === undefined || value === null || value === "") return;
-      const score = Math.max(...TOKEN_MAP[key].map((token) => tokenScore(metaText, token)));
+      let score = Math.max(...TOKEN_MAP[key].map((token) => tokenScore(metaText, token)));
+
+      // Penalise full_name when the field clearly belongs to first/last
+      if (key === "full_name" && /\bfirst name\b|\bgiven name\b|\blast name\b|\bsurname\b|\bfamily name\b/.test(metaText)) {
+        score -= 0.35;
+      }
+
       const keyThreshold =
         key.startsWith("eeo_") || key === "requires_sponsorship" || key === "willing_to_relocate"
           ? Math.min(Number(threshold), 0.3)
@@ -436,6 +458,7 @@
     maybeSemanticValue,
     similarity,
     splitFullName,
-    interpolateCoverLetter
+    interpolateCoverLetter,
+    computeYearsOfExperience
   };
 })();

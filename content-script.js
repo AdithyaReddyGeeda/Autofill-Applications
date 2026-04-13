@@ -744,7 +744,7 @@
     return scored.sort((a, b) => b.score - a.score);
   }
 
-  async function pickAndClickWorkdayListOption(wantedRaw) {
+  async function pickAndClickWorkdayListOption(wantedRaw, triggerForVerify) {
     const wanted = String(wantedRaw || "").trim();
     if (!wanted) return false;
     let scored = collectWorkdayListScores(wanted);
@@ -755,7 +755,7 @@
     const best = scored[0];
     if (!best || best.score < SAFE_MATCH_THRESHOLD) {
       addFillWarning({
-        trigger: null, wanted, reason: "workday-list-low-confidence",
+        trigger: triggerForVerify, wanted, reason: "workday-list-low-confidence",
         label: "", fieldType: "workday-dropdown",
         bestText: best?.text, bestScore: best?.score,
         topCandidates: scored.slice(0, 5)
@@ -776,11 +776,42 @@
     } catch {
       return false;
     }
+    await sleep(280);
+
+    // Verify pick via site handler if available
+    const wdHandler = window.JobAutofillSiteHandlers?.workdayHandler;
+    let verified = true;
+    if (triggerForVerify && wdHandler?.verifyPick) {
+      verified = wdHandler.verifyPick(triggerForVerify, best.text);
+      if (!verified) {
+        logWorkdayAttempt({
+          label: "", wanted, selector: elSummary(triggerForVerify),
+          optionsFound: scored.length, topCandidates: scored.slice(0, 5),
+          outcome: "retry", valueStuck: false
+        });
+        // Retry once: re-collect and re-pick
+        await sleep(300);
+        const retry = collectWorkdayListScores(wanted);
+        const retryBest = retry[0];
+        if (retryBest && retryBest.score >= SAFE_MATCH_THRESHOLD) {
+          const rRadio = retryBest.node.querySelector?.('input[type="radio"]');
+          if (rRadio) { rRadio.focus?.(); dispatchFullPointerClick(rRadio); }
+          else { dispatchFullPointerClick(retryBest.node); }
+          await sleep(280);
+          verified = wdHandler.verifyPick(triggerForVerify, retryBest.text);
+        }
+      }
+    }
+
+    logWorkdayAttempt({
+      label: "", wanted, selector: elSummary(triggerForVerify || target),
+      optionsFound: scored.length, topCandidates: scored.slice(0, 5),
+      outcome: verified ? "picked" : "pick-unverified", valueStuck: verified
+    });
     logDropdownAttempt({
       label: "", wanted, fieldType: "workday-dropdown", triggerEl: target,
-      scored, outcome: "picked", reason: null
+      scored, outcome: verified ? "picked" : "pick-unverified", reason: verified ? null : "value may not have stuck"
     });
-    await sleep(220);
     return true;
   }
 
@@ -789,14 +820,19 @@
     if (!wanted) return null;
     trigger.scrollIntoView({ block: "center", inline: "nearest" });
     await sleep(120);
-    try {
-      trigger.focus?.();
-    } catch {
-      /* ignore */
-    }
+    try { trigger.focus?.(); } catch { /* ignore */ }
     dispatchFullPointerClick(trigger);
     await sleep(520);
-    await pickAndClickWorkdayListOption(wanted);
+
+    // Check popup actually opened; retry if not
+    const wdHandler = window.JobAutofillSiteHandlers?.workdayHandler;
+    if (wdHandler && !wdHandler.isPopupOpen()) {
+      ddLog("workday: popup not detected after click, retrying");
+      dispatchFullPointerClick(trigger);
+      await sleep(600);
+    }
+
+    await pickAndClickWorkdayListOption(wanted, trigger);
     return null;
   }
 
@@ -805,31 +841,23 @@
     if (!wanted) return null;
     input.scrollIntoView({ block: "center", inline: "nearest" });
     await sleep(80);
-    try {
-      input.focus();
-    } catch {
-      /* ignore */
-    }
+    try { input.focus(); } catch { /* ignore */ }
     dispatchFullPointerClick(input);
     await sleep(200);
     try {
       setNativeValue(input, "");
       setNativeValue(input, wanted);
       dispatchFieldEvents(input, wanted);
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
     await sleep(350);
-    const opened = await pickAndClickWorkdayListOption(wanted);
+    const opened = await pickAndClickWorkdayListOption(wanted, input);
     if (!opened) {
       try {
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
         input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
       await sleep(400);
-      await pickAndClickWorkdayListOption(wanted);
+      await pickAndClickWorkdayListOption(wanted, input);
     }
     return null;
   }
@@ -917,23 +945,6 @@
       const r = node.getBoundingClientRect();
       return r.bottom >= tr.top - 40;
     });
-  }
-
-  function isGenericCustomDropdown(el) {
-    if (!el || el.nodeType !== 1) return false;
-    const tag = el.tagName?.toLowerCase();
-    if (tag === "select" || tag === "textarea") return false;
-
-    const role = (el.getAttribute("role") || "").toLowerCase();
-    const hasPopup = (el.getAttribute("aria-haspopup") || "").toLowerCase();
-
-    if (role === "combobox" || role === "listbox") return true;
-
-    if (hasPopup === "listbox" || hasPopup === "menu") {
-      return tag === "div" || tag === "button" || tag === "span" || tag === "a";
-    }
-
-    return false;
   }
 
   async function setGenericDropdownValue(trigger, wantedRaw) {
@@ -1051,7 +1062,16 @@
   function isGenericCustomDropdown(el) {
     if (!el || el.nodeType !== 1) return false;
     if (isWorkdayDropdownTrigger(el)) return false;
-    return window.JobAutofillDetector?.isCustomDropdownTrigger?.(el) || false;
+    const tag = el.tagName?.toLowerCase();
+    if (tag === "select" || tag === "textarea") return false;
+    if (window.JobAutofillDetector?.isCustomDropdownTrigger?.(el)) return true;
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    const hasPopup = (el.getAttribute("aria-haspopup") || "").toLowerCase();
+    if (role === "combobox" || role === "listbox") return true;
+    if (hasPopup === "listbox" || hasPopup === "menu") {
+      return tag === "div" || tag === "button" || tag === "span" || tag === "a";
+    }
+    return false;
   }
 
   /** Collect scored option elements from any open listbox/menu in the DOM. */
@@ -1550,6 +1570,269 @@
     }, 3000);
   }
 
+  // ---------------------------------------------------------------------------
+  //  Workday debug logging
+  // ---------------------------------------------------------------------------
+
+  function logWorkdayAttempt({ label, wanted, selector, optionsFound, topCandidates, outcome, valueStuck }) {
+    if (!isDebug()) return;
+    const icon = outcome === "picked" ? "\u2705" : outcome === "retry" ? "\u{1F504}" : "\u274C";
+    console.groupCollapsed(`${icon} [Workday] wanted "${wanted}"`);
+    console.log("Field label    :", label || "(none)");
+    console.log("Desired value  :", wanted);
+    console.log("Selector       :", selector || "(auto)");
+    console.log("Options found  :", optionsFound ?? 0);
+    if (topCandidates?.length) {
+      console.log("Top candidates :");
+      console.table(topCandidates.map((c, i) => ({
+        "#": i + 1,
+        text: (c.text || "").slice(0, 80),
+        score: c.score?.toFixed(3)
+      })));
+    }
+    console.log("Outcome        :", outcome);
+    console.log("Value stuck    :", valueStuck);
+    console.groupEnd();
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Workday label → profile value resolver
+  //
+  //  Uses the WORKDAY_QUESTION_MAP from site-handlers.js to map a Workday
+  //  field's label text to the user's stored profile value.
+  // ---------------------------------------------------------------------------
+
+  function resolveWorkdayLabelValue(labelText, profile) {
+    const siteHandlers = window.JobAutofillSiteHandlers;
+    if (!siteHandlers?.workdayMatchLabel) return null;
+    const key = siteHandlers.workdayMatchLabel(labelText);
+    if (!key) return null;
+    const eeo = profile.eeo_responses || {};
+    const val = {
+      work_authorization: profile.work_authorization || "",
+      requires_sponsorship: (() => {
+        const r = profile.requires_sponsorship;
+        if (r === undefined || r === null || r === "") return "";
+        return /^(yes|true|1)$/i.test(String(r).trim()) ? "Yes" : "No";
+      })(),
+      willing_to_relocate: (() => {
+        const r = profile.willing_to_relocate;
+        if (r === undefined || r === null || r === "") return "";
+        return /^(yes|true|1)$/i.test(String(r).trim()) ? "Yes" : "No";
+      })(),
+      country: profile.country || profile.location || "",
+      state: profile.state || "",
+      city: profile.city || "",
+      postal_code: profile.postal_code || "",
+      eeo_gender: eeo.gender || profile.gender || "",
+      eeo_race: eeo.race_ethnicity || eeo.race || eeo.ethnicity || "",
+      eeo_veteran: eeo.veteran || eeo.veteran_status || "",
+      eeo_disability: eeo.disability || eeo.disability_status || "",
+      years_of_experience: (() => {
+        const exp = Array.isArray(profile.experience) ? profile.experience : [];
+        if (!exp.length) return profile.years_of_experience || "";
+        return window.JobAutofillMatcher?.computeYearsOfExperience?.(exp) || profile.years_of_experience || "";
+      })(),
+      education_degree: (() => {
+        const edu = Array.isArray(profile.education) ? profile.education : [];
+        const last = edu[edu.length - 1];
+        return last ? [last.degree, last.fieldOfStudy].filter(Boolean).join(" ").trim() : "";
+      })(),
+      first_name: profile.first_name || "",
+      last_name: profile.last_name || "",
+      email: profile.email || "",
+      phone: profile.phone || "",
+      linkedin: profile.linkedin || "",
+      referral_contact: profile.referral_contact || "",
+      salary_expectations: profile.salary_expectations || "",
+      start_date_availability: profile.start_date_availability || "",
+    }[key];
+    if (!val) return null;
+    return { key, value: val };
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Workday-specific fill pass
+  //
+  //  Runs BEFORE the generic fill for Workday pages.  Scans Workday-specific
+  //  controls (custom dropdowns, text inputs with data-automation-id, etc.)
+  //  and fills them using the question-label map + profile data.
+  //
+  //  After each successful fill, waits for the DOM to settle then rescans
+  //  for dependent questions that may have appeared.  Repeats up to
+  //  MAX_RESCAN_PASSES times.
+  // ---------------------------------------------------------------------------
+
+  const MAX_RESCAN_PASSES = 4;
+  const WORKDAY_RESCAN_DELAY_MS = 900;
+
+  function collectWorkdayFormFields() {
+    const fields = [];
+    const seen = new Set();
+
+    const addField = (el, labelText) => {
+      if (seen.has(el)) return;
+      seen.add(el);
+      fields.push({ element: el, label: labelText });
+    };
+
+    // Workday text/email/tel inputs
+    document.querySelectorAll([
+      'input[data-automation-id]',
+      'textarea[data-automation-id]',
+      'select[data-automation-id]'
+    ].join(",")).forEach((el) => {
+      if (el.type === "hidden" || el.type === "submit") return;
+      const label = workdayFieldLabel(el);
+      if (label) addField(el, label);
+    });
+
+    // Workday dropdown triggers
+    const triggerSels = [
+      '[data-automation-id="selectWidget"]',
+      'button[data-automation-id*="dropDown"]',
+      'button[data-automation-id*="DropDown"]',
+      'div[data-automation-id*="dropDown"][tabindex]',
+      'div[data-automation-id*="DropDown"][tabindex]',
+      'div[id*="dropDownSelectList"]'
+    ];
+    for (const sel of triggerSels) {
+      document.querySelectorAll(sel).forEach((el) => {
+        const label = workdayFieldLabel(el);
+        if (label) addField(el, label);
+      });
+    }
+
+    // Workday combobox inputs (role="combobox")
+    document.querySelectorAll('input[role="combobox"]').forEach((el) => {
+      const label = workdayFieldLabel(el);
+      if (label) addField(el, label);
+    });
+
+    return fields;
+  }
+
+  function workdayFieldLabel(el) {
+    if (!el) return "";
+    // 1. Explicit <label for>
+    if (el.id) {
+      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (lab) return lab.textContent.replace(/\s+/g, " ").trim();
+    }
+    // 2. aria-label
+    const aria = (el.getAttribute("aria-label") || "").trim();
+    if (aria) return aria;
+    // 3. aria-labelledby
+    const lblBy = el.getAttribute("aria-labelledby");
+    if (lblBy) {
+      const parts = lblBy.split(/\s+/).map((id) => document.getElementById(id)?.textContent || "").filter(Boolean);
+      if (parts.length) return parts.join(" ").replace(/\s+/g, " ").trim();
+    }
+    // 4. data-automation-id label pattern
+    const aid = el.getAttribute("data-automation-id") || "";
+    if (aid) {
+      const labelEl = document.querySelector(`[data-automation-id="${CSS.escape(aid)}Label"]`) ||
+                       document.querySelector(`label[data-automation-id="${CSS.escape(aid)}"]`);
+      if (labelEl) return labelEl.textContent.replace(/\s+/g, " ").trim();
+    }
+    // 5. Walk up to find section heading
+    let cur = el.parentElement;
+    for (let i = 0; i < 6 && cur; i++) {
+      const headings = cur.querySelectorAll("label, legend, h1, h2, h3, h4, [data-automation-id*=\"label\"], [data-automation-id*=\"Label\"]");
+      for (const h of headings) {
+        if (!h.contains(el)) {
+          const text = h.textContent.replace(/\s+/g, " ").trim();
+          if (text && text.length < 200) return text;
+        }
+      }
+      cur = cur.parentElement;
+    }
+    return "";
+  }
+
+  function isWorkdayFieldAlreadyFilled(el) {
+    const tag = el.tagName?.toLowerCase();
+    if (tag === "input" || tag === "textarea") {
+      return Boolean((el.value || "").trim());
+    }
+    if (tag === "select") {
+      return el.selectedIndex > 0;
+    }
+    // For dropdown triggers, check if they have a selected item
+    const selected = el.querySelector?.('[data-automation-id="selectedItem"]');
+    if (selected) {
+      const text = (selected.textContent || "").replace(/\s+/g, " ").trim();
+      return Boolean(text) && !/^(select|choose|please|pick|--|−|—|\.\.\.|\s)*$/i.test(text);
+    }
+    return false;
+  }
+
+  async function workdayFillPass(profile, preview) {
+    const siteHandlers = window.JobAutofillSiteHandlers;
+    if (!siteHandlers?.isWorkday?.()) return { filled: 0, fieldKeys: [] };
+
+    if (isDebug()) console.group("[Workday] Dedicated fill pass");
+
+    let totalFilled = 0;
+    const filledKeys = [];
+    const filledElements = new Set();
+
+    for (let pass = 0; pass <= MAX_RESCAN_PASSES; pass++) {
+      const fields = collectWorkdayFormFields().filter((f) => !filledElements.has(f.element));
+      if (!fields.length) break;
+
+      if (isDebug() && pass > 0) {
+        console.log(`[Workday] Rescan pass ${pass}: found ${fields.length} new field(s)`);
+      }
+
+      let filledThisPass = 0;
+
+      for (const { element, label } of fields) {
+        if (isWorkdayFieldAlreadyFilled(element)) continue;
+
+        const resolved = resolveWorkdayLabelValue(label, profile);
+        if (!resolved) continue;
+
+        const { key, value } = resolved;
+        if (!value) continue;
+
+        // Check if user overrode this in preview
+        const overrideIdx = preview?.overrides ? Object.entries(preview.overrides).find(
+          ([, v]) => v === value
+        ) : null;
+        const fillValue = overrideIdx?.[1] || value;
+
+        try {
+          if (isDebug()) {
+            console.log(`[Workday] Filling: label="${label}" key="${key}" value="${String(fillValue).slice(0, 60)}"`);
+          }
+
+          await applyFieldValue(element, fillValue, key);
+          filledElements.add(element);
+          totalFilled++;
+          filledThisPass++;
+          filledKeys.push(key);
+          highlightField(element);
+
+          // Wait for dependent questions to potentially appear
+          await sleep(WORKDAY_RESCAN_DELAY_MS);
+
+        } catch (err) {
+          if (isDebug()) console.error(`[Workday] Fill error for "${label}":`, err);
+        }
+      }
+
+      if (filledThisPass === 0) break;
+    }
+
+    if (isDebug()) {
+      console.log(`[Workday] Fill pass complete: ${totalFilled} field(s) filled`);
+      console.groupEnd();
+    }
+
+    return { filled: totalFilled, fieldKeys: filledKeys };
+  }
+
   async function fillForm({ dryRun = false, matchThreshold } = {}) {
     STATE.profile = await getStorage("profile", {});
     STATE.resumes = await getStorage("resumes", []);
@@ -1593,6 +1876,16 @@
     let filledCount = 0;
     let skippedCount = 0;
     const matchedKeys = [];
+
+    // Run Workday-specific fill pass first for better coverage of Workday
+    // custom controls and dependent questions that appear after filling.
+    const isWorkday = window.JobAutofillSiteHandlers?.isWorkday?.() || false;
+    if (isWorkday) {
+      const wdResult = await workdayFillPass(enrichedProfile, preview);
+      filledCount += wdResult.filled;
+      matchedKeys.push(...wdResult.fieldKeys);
+    }
+
     for (let index = 0; index < matches.length; index += 1) {
       const m = matches[index];
       const mergedText = `${m.meta.name} ${m.meta.id} ${m.meta.placeholder} ${m.meta.label} ${m.meta.nearText}`;
@@ -1629,6 +1922,15 @@
       } catch (_err) {
         if (isDebug()) console.error(`[AutoFill] #${index} error:`, _err);
       }
+    }
+
+    // On Workday, do a final rescan for dependent questions that appeared
+    // after the main fill loop.
+    if (isWorkday) {
+      await sleep(WORKDAY_RESCAN_DELAY_MS);
+      const postResult = await workdayFillPass(enrichedProfile, preview);
+      filledCount += postResult.filled;
+      matchedKeys.push(...postResult.fieldKeys);
     }
 
     // Report structured warnings for any dropdowns/radios that were skipped.

@@ -157,6 +157,44 @@
     </ul>
   </div>
 
+  <!-- Workday selectWidget: Work Authorization -->
+  <div class="field" id="auth-field">
+    <label id="auth-label">Are you legally authorized to work in the United States?</label>
+    <div class="hint">Work authorization question — tests the Workday question-label mapping.</div>
+    <button type="button" class="wd-select"
+            data-automation-id="selectWidget"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="auth-label"
+            id="auth-trigger">
+      <span class="wd-value">Select</span>
+      <span class="wd-chevron">▼</span>
+    </button>
+    <ul role="listbox" class="wd-popup" id="auth-popup" data-automation-activepopup="false">
+      <li role="option" data-automation-id="promptOption" data-automation-label="Yes">Yes</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="No">No</li>
+    </ul>
+  </div>
+
+  <!-- Workday dependent question: appears after "No" is selected for work auth -->
+  <div class="field" id="sponsorship-field" style="display:none;">
+    <label id="sponsorship-label">Will you now or in the future require visa sponsorship?</label>
+    <div class="hint">Dependent question — only appears after work authorization is answered. Tests rescan logic.</div>
+    <button type="button" class="wd-select"
+            data-automation-id="selectWidget"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-labelledby="sponsorship-label"
+            id="sponsorship-trigger">
+      <span class="wd-value">Select</span>
+      <span class="wd-chevron">▼</span>
+    </button>
+    <ul role="listbox" class="wd-popup" id="sponsorship-popup" data-automation-activepopup="false">
+      <li role="option" data-automation-id="promptOption" data-automation-label="Yes">Yes</li>
+      <li role="option" data-automation-id="promptOption" data-automation-label="No">No</li>
+    </ul>
+  </div>
+
   <!-- Workday combobox input: Job Title / Role search -->
   <div class="field" id="jobtitle-field">
     <label for="jobtitle-input">How did you hear about us?</label>
@@ -287,6 +325,20 @@
     const inside = e.target.closest(".field");
     if (!inside) closeAllPopups();
   });
+
+  // Dependent question: show sponsorship after work auth is answered
+  const authPopup = document.getElementById("auth-popup");
+  if (authPopup) {
+    authPopup.querySelectorAll('[role="option"]').forEach((opt) => {
+      opt.addEventListener("click", () => {
+        const field = document.getElementById("sponsorship-field");
+        if (field) {
+          setTimeout(() => { field.style.display = ""; }, 400);
+          logEvent("dependent → sponsorship question now visible");
+        }
+      });
+    });
+  }
 
   form.addEventListener("input", (e) => {
     if (e.target.closest(".wd-popup")) return;

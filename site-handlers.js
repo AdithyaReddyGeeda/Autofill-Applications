@@ -95,6 +95,42 @@
   }
 
   // -------------------------------------------------------------------------
+  //  Workday — question label → profile key mapping
+  //
+  //  Each entry is { pattern: RegExp, key: string }.  During the dedicated
+  //  Workday fill pass the label text of every unfilled field is tested
+  //  against these patterns.  The first match wins.
+  // -------------------------------------------------------------------------
+  const WORKDAY_QUESTION_MAP = [
+    { pattern: /are you (legally )?(authorized|eligible) to work/i,                  key: "work_authorization" },
+    { pattern: /do you (now or in the future )?require.*sponsor/i,                   key: "requires_sponsorship" },
+    { pattern: /will you (now or in the future )?require.*sponsor/i,                 key: "requires_sponsorship" },
+    { pattern: /require.*visa.*sponsor/i,                                            key: "requires_sponsorship" },
+    { pattern: /require.*immigration.*sponsor/i,                                     key: "requires_sponsorship" },
+    { pattern: /need.*sponsor/i,                                                     key: "requires_sponsorship" },
+    { pattern: /country/i,                                                           key: "country" },
+    { pattern: /state.*province|province.*state/i,                                   key: "state" },
+    { pattern: /\bstate\b/i,                                                         key: "state" },
+    { pattern: /\bcity\b/i,                                                          key: "city" },
+    { pattern: /postal.*code|zip.*code/i,                                            key: "postal_code" },
+    { pattern: /gender/i,                                                            key: "eeo_gender" },
+    { pattern: /ethnicity|race/i,                                                    key: "eeo_race" },
+    { pattern: /veteran/i,                                                           key: "eeo_veteran" },
+    { pattern: /disability/i,                                                        key: "eeo_disability" },
+    { pattern: /years of experience/i,                                               key: "years_of_experience" },
+    { pattern: /highest.*education|education.*level|degree.*level/i,                 key: "education_degree" },
+    { pattern: /willing to relocate|open to relocation/i,                            key: "willing_to_relocate" },
+    { pattern: /preferred name|first name/i,                                         key: "first_name" },
+    { pattern: /last name|family name/i,                                             key: "last_name" },
+    { pattern: /email/i,                                                             key: "email" },
+    { pattern: /phone/i,                                                             key: "phone" },
+    { pattern: /linkedin/i,                                                          key: "linkedin" },
+    { pattern: /how did you hear|source|referral/i,                                  key: "referral_contact" },
+    { pattern: /salary|compensation|pay/i,                                           key: "salary_expectations" },
+    { pattern: /start date|available.*start|earliest.*start/i,                       key: "start_date_availability" },
+  ];
+
+  // -------------------------------------------------------------------------
   //  Workday
   // -------------------------------------------------------------------------
   const workday = {
@@ -125,12 +161,33 @@
       ]
     },
 
+    /** Check whether the Workday popup container is visible in the DOM. */
+    isPopupOpen() {
+      const popup = document.querySelector('[data-automation-activepopup="true"]');
+      if (popup) {
+        const r = popup.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return true;
+      }
+      const lbs = document.querySelectorAll('[role="listbox"]');
+      for (const lb of lbs) {
+        const r = lb.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && lb.querySelector('[role="option"]')) return true;
+      }
+      return false;
+    },
+
     async open(trigger) {
       trigger.scrollIntoView({ block: "center", inline: "nearest" });
       await sleep(120);
       try { trigger.focus?.(); } catch { /* ignore */ }
       pointerClick(trigger);
       await sleep(520);
+
+      if (!this.isPopupOpen()) {
+        ddLog("workday: popup not detected after first click, retrying");
+        pointerClick(trigger);
+        await sleep(600);
+      }
     },
 
     collectOptions() {
@@ -158,6 +215,16 @@
       return out;
     },
 
+    /** Read the currently displayed value in a trigger widget. */
+    readValue(trigger) {
+      const selected = trigger.querySelector?.('[data-automation-id="selectedItem"]');
+      if (selected) return cleanText(selected);
+      const ariaLabel = (trigger.getAttribute("aria-label") || "").trim();
+      const text = cleanText(trigger);
+      if (text && !isPlaceholder(text) && text !== ariaLabel) return text;
+      return "";
+    },
+
     async pick(optionEl) {
       const radio = optionEl.querySelector?.('input[type="radio"]');
       if (radio) {
@@ -166,7 +233,22 @@
       } else {
         pointerClick(optionEl);
       }
-      await sleep(220);
+      await sleep(280);
+    },
+
+    /**
+     * Verify the trigger reflects the expected value after a pick.
+     * Returns true if the value stuck, false otherwise.
+     */
+    verifyPick(trigger, expectedText) {
+      const current = this.readValue(trigger);
+      if (!current) return false;
+      const norm = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+      const cur = norm(current);
+      const exp = norm(expectedText);
+      if (cur === exp) return true;
+      if (cur.includes(exp) || exp.includes(cur)) return true;
+      return false;
     },
 
     isComboboxInput(el) {
@@ -524,7 +606,6 @@
       opts = handler.collectOptions(trigger);
     }
 
-    // Filter out unsafe options (disabled, hidden, placeholder, duplicates)
     const seenTexts = new Set();
     opts = opts.filter((o) => !isOptionUnsafe(o.node, seenTexts));
 
@@ -567,13 +648,44 @@
     }
 
     await handler.pick(best.node);
-    logSiteAttempt(handler.id, triggerLabel, trigger, wanted, scored, "picked", null);
-    return { filled: true, prior, warning: null };
+
+    // Workday verify + retry: check whether the selection stuck
+    let verified = true;
+    if (handler.id === "workday" && handler.verifyPick) {
+      verified = handler.verifyPick(trigger, best.text);
+      if (!verified) {
+        ddLog("workday: pick did not stick, retrying");
+        await handler.open(trigger);
+        const retryOpts = handler.collectOptions(trigger);
+        const retryMatch = retryOpts.find((o) =>
+          cleanText(o.node).toLowerCase().includes(best.text.toLowerCase()) ||
+          best.text.toLowerCase().includes(cleanText(o.node).toLowerCase())
+        );
+        if (retryMatch) {
+          await handler.pick(retryMatch.node);
+          await sleep(300);
+          verified = handler.verifyPick(trigger, best.text);
+        }
+        logSiteAttempt(handler.id, triggerLabel, trigger, wanted, scored,
+          verified ? "picked (retry)" : "pick-failed", verified ? null : "value did not stick after retry");
+      } else {
+        logSiteAttempt(handler.id, triggerLabel, trigger, wanted, scored, "picked (verified)", null);
+      }
+    } else {
+      logSiteAttempt(handler.id, triggerLabel, trigger, wanted, scored, "picked", null);
+    }
+
+    return { filled: verified, prior, warning: verified ? null : {
+      reason: "site-pick-not-verified", site: handler.id, wanted,
+      label: triggerLabel, fieldType: `site-${handler.id}`,
+      bestText: best?.text, bestScore: best?.score,
+      topCandidates: scored.slice(0, 5)
+    }};
   }
 
   function logSiteAttempt(siteId, label, triggerEl, wanted, scored, outcome, reason) {
     if (!isDebug()) return;
-    const icon = outcome === "picked" ? "\u2705" : "\u274C";
+    const icon = outcome.startsWith("picked") ? "\u2705" : "\u274C";
     console.groupCollapsed(`${icon} [SiteHandler:${siteId}] wanted "${wanted}"`);
     console.log("Field label :", label || "(none)");
     console.log("Desired value:", wanted);
@@ -593,12 +705,28 @@
     console.groupEnd();
   }
 
+  /**
+   * Match a Workday field label to a profile key using the question map.
+   * Returns the profile key string or null if no pattern matches.
+   */
+  function workdayMatchLabel(labelText) {
+    if (!labelText) return null;
+    for (const entry of WORKDAY_QUESTION_MAP) {
+      if (entry.pattern.test(labelText)) return entry.key;
+    }
+    return null;
+  }
+
   // -------------------------------------------------------------------------
   //  Public API
   // -------------------------------------------------------------------------
   window.JobAutofillSiteHandlers = {
     SITE_HANDLERS,
     detectSiteHandler,
-    siteSpecificDropdownFill
+    siteSpecificDropdownFill,
+    WORKDAY_QUESTION_MAP,
+    workdayMatchLabel,
+    isWorkday: () => workday.match(),
+    workdayHandler: workday
   };
 })();
