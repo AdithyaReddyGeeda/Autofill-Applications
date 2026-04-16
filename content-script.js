@@ -709,14 +709,29 @@
     }
   }
 
-  function collectWorkdayListScores(wanted) {
+  function collectWorkdayListScores(wanted, requireVisible = true) {
     const scored = [];
     const seen = new Set();
     const seenTexts = new Set();
     const pushNode = (node, textSource) => {
       if (!node || seen.has(node) || isWorkdayOptionExcluded(node)) return;
       seen.add(node);
-      if (isOptionNodeUnsafe(node, seenTexts)) return;
+      // In relaxed mode, skip the full isOptionNodeUnsafe check (which
+      // rejects nodes with 0×0 bounding rects during Workday animations).
+      if (requireVisible) {
+        if (isOptionNodeUnsafe(node, seenTexts)) return;
+      } else {
+        if (node.getAttribute("aria-disabled") === "true") return;
+        if (node.hasAttribute("disabled")) return;
+        const style = node.getAttribute("style") || "";
+        if (/display\s*:\s*none/i.test(style)) return;
+        const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+        if (!text || text.length > 500) return;
+        if (/^(select|choose|please|pick|--|−|—|\.\.\.|\s)*$/i.test(text)) return;
+        const key = text.toLowerCase();
+        if (seenTexts.has(key)) return;
+        seenTexts.add(key);
+      }
       const text = normChoice(textSource || node.textContent || "");
       if (!text) return;
       scored.push({ node, text, score: scoreChoiceMatch(wanted, "", text) });
@@ -747,10 +762,18 @@
   async function pickAndClickWorkdayListOption(wantedRaw, triggerForVerify) {
     const wanted = String(wantedRaw || "").trim();
     if (!wanted) return false;
-    let scored = collectWorkdayListScores(wanted);
+
+    // Progressive backoff: real Workday popups can take 1-3s to render options.
+    let scored = [];
+    const delays = [0, 500, 800, 1200];
+    for (const delay of delays) {
+      if (delay > 0) await sleep(delay);
+      scored = collectWorkdayListScores(wanted, true);
+      if (scored.length) break;
+    }
+    // Relaxed fallback: options may be in the DOM but not yet visible (0×0 rect)
     if (!scored.length) {
-      await sleep(500);
-      scored = collectWorkdayListScores(wanted);
+      scored = collectWorkdayListScores(wanted, false);
     }
     const best = scored[0];
     if (!best || best.score < SAFE_MATCH_THRESHOLD) {
@@ -819,17 +842,16 @@
     const wanted = String(wantedRaw || "").trim();
     if (!wanted) return null;
     trigger.scrollIntoView({ block: "center", inline: "nearest" });
-    await sleep(120);
+    await sleep(150);
     try { trigger.focus?.(); } catch { /* ignore */ }
     dispatchFullPointerClick(trigger);
-    await sleep(520);
+    await sleep(900);
 
-    // Check popup actually opened; retry if not
     const wdHandler = window.JobAutofillSiteHandlers?.workdayHandler;
     if (wdHandler && !wdHandler.isPopupOpen()) {
       ddLog("workday: popup not detected after click, retrying");
       dispatchFullPointerClick(trigger);
-      await sleep(600);
+      await sleep(1200);
     }
 
     await pickAndClickWorkdayListOption(wanted, trigger);

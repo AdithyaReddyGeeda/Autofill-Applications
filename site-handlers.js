@@ -161,58 +161,82 @@
       ]
     },
 
-    /** Check whether the Workday popup container is visible in the DOM. */
+    /** Check whether the Workday popup container is present (visible OR just in the DOM). */
     isPopupOpen() {
       const popup = document.querySelector('[data-automation-activepopup="true"]');
-      if (popup) {
-        const r = popup.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) return true;
+      if (popup) return true;
+      for (const sel of this.options.items) {
+        if (document.querySelector(sel)) return true;
       }
       const lbs = document.querySelectorAll('[role="listbox"]');
       for (const lb of lbs) {
+        if (lb.querySelector('[role="option"]')) return true;
         const r = lb.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0 && lb.querySelector('[role="option"]')) return true;
+        if (r.width > 0 && r.height > 0) return true;
       }
       return false;
     },
 
     async open(trigger) {
       trigger.scrollIntoView({ block: "center", inline: "nearest" });
-      await sleep(120);
+      await sleep(150);
       try { trigger.focus?.(); } catch { /* ignore */ }
       pointerClick(trigger);
-      await sleep(520);
+      await sleep(900);
 
       if (!this.isPopupOpen()) {
         ddLog("workday: popup not detected after first click, retrying");
         pointerClick(trigger);
-        await sleep(600);
+        await sleep(1200);
+      }
+
+      if (!this.isPopupOpen()) {
+        ddLog("workday: popup still missing, third attempt with ArrowDown");
+        try {
+          trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", bubbles: true }));
+        } catch { /* ignore */ }
+        pointerClick(trigger);
+        await sleep(1000);
       }
     },
 
     collectOptions() {
-      const seen = new Set();
-      const out = [];
-      const push = (node, textOverride) => {
-        if (!node || seen.has(node)) return;
-        if (node.closest?.('[data-automation-id="selectedItem"]')) return;
-        if (!optionVisible(node)) return;
-        seen.add(node);
-        const text = textOverride || cleanText(node);
-        if (isPlaceholder(text)) return;
-        out.push({ node, text });
+      const gather = (requireVisible) => {
+        const seen = new Set();
+        const out = [];
+        const push = (node, textOverride) => {
+          if (!node || seen.has(node)) return;
+          if (node.closest?.('[data-automation-id="selectedItem"]')) return;
+          if (requireVisible && !optionVisible(node)) return;
+          if (node.getAttribute("aria-disabled") === "true") return;
+          if (node.hasAttribute("disabled")) return;
+          const style = node.getAttribute("style") || "";
+          if (/display\s*:\s*none/i.test(style)) return;
+          seen.add(node);
+          const text = textOverride || cleanText(node);
+          if (isPlaceholder(text)) return;
+          out.push({ node, text });
+        };
+        for (const sel of this.options.items) {
+          document.querySelectorAll(sel).forEach((n) => {
+            if (sel.includes("promptOption")) {
+              const opt = n.closest("[role=option]") || n;
+              push(opt, (n.getAttribute("data-automation-label") || "").trim() || cleanText(opt));
+            } else {
+              push(n);
+            }
+          });
+        }
+        return out;
       };
-      for (const sel of this.options.items) {
-        document.querySelectorAll(sel).forEach((n) => {
-          if (sel.includes("promptOption")) {
-            const opt = n.closest("[role=option]") || n;
-            push(opt, (n.getAttribute("data-automation-label") || "").trim() || cleanText(opt));
-          } else {
-            push(n);
-          }
-        });
-      }
-      return out;
+
+      // Strict pass: require bounding-rect visibility
+      const strict = gather(true);
+      if (strict.length) return strict;
+
+      // Relaxed pass: options may be in the DOM but still animating (0×0 rect)
+      ddLog("workday: strict visibility found 0 options, trying relaxed pass");
+      return gather(false);
     },
 
     /** Read the currently displayed value in a trigger widget. */
@@ -600,14 +624,27 @@
 
     await handler.open(trigger);
 
-    let opts = handler.collectOptions(trigger);
-    if (!opts.length) {
-      await sleep(400);
+    // Collect options with progressive backoff retries.
+    // Real Workday popups render asynchronously and can take 1-3 seconds.
+    const retryDelays = handler.id === "workday"
+      ? [0, 500, 800, 1200, 1500]
+      : [0, 400];
+
+    let opts = [];
+    for (const delay of retryDelays) {
+      if (delay > 0) await sleep(delay);
       opts = handler.collectOptions(trigger);
+      if (opts.length) break;
     }
 
-    const seenTexts = new Set();
-    opts = opts.filter((o) => !isOptionUnsafe(o.node, seenTexts));
+    // For non-Workday sites, apply the general safety filter.
+    // Workday's collectOptions already handles disabled/hidden/placeholder
+    // internally, so re-filtering would risk dropping options that passed
+    // the relaxed visibility fallback.
+    if (handler.id !== "workday") {
+      const seenTexts = new Set();
+      opts = opts.filter((o) => !isOptionUnsafe(o.node, seenTexts));
+    }
 
     ddLog(`site="${handler.id}" options=${opts.length}`);
     if (!opts.length) {
