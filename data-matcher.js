@@ -322,6 +322,11 @@
       return "";
     }
     if (key === "phone_extension") return String(profile.phone_extension || "").trim();
+    if (key === "start_date_availability") {
+      return String(
+        profile.start_date_availability || profile.notice_period || profile.availability || ""
+      ).trim();
+    }
     if (key === "salary_pay_period") return String(profile.salary_pay_period || "").trim();
     if (key === "english_proficiency") return String(profile.english_proficiency || "").trim();
     if (key === "referral_contact") return String(profile.referral_contact || "").trim();
@@ -351,6 +356,111 @@
     return profile[key];
   }
 
+  /**
+   * Intent-based label → profile key (ordered: first match wins).
+   * Covers repeated phrasing on Workday, LinkedIn, Indeed, Greenhouse, etc.
+   * Runs before TOKEN_MAP fuzzy scoring when confidence is high enough.
+   */
+  const INTENT_LABEL_RULES = [
+    {
+      re: /(require|need|seek|will you).{0,70}sponsor|visa\s+sponsorship|sponsorship\s+for\s+employment|immigration\s+sponsorship|employment\s+sponsorship|h[-\s]?1b|\btn\s+visa\b|need\s+a\s+visa|sponsorship\s+now\s+or\s+in\s+the\s+future|require\s+immigration/i,
+      key: "requires_sponsorship",
+      confidence: 0.97
+    },
+    {
+      re: /(legally\s+)?authorized\s+to\s+work|eligible\s+to\s+work|right\s+to\s+work|work\s+authorization|work\s+authorization\s+status|permit\s+to\s+work|legally\s+permitted\s+to\s+work|eligible\s+for\s+employment|lawful\s+right\s+to\s+work/i,
+      key: "work_authorization",
+      confidence: 0.97,
+      unless: /(require|need|will you).{0,50}sponsor|visa\s+sponsorship|h[-\s]?1b|\btn\s+visa\b/i
+    },
+    {
+      re: /\bcountry\s+of\s+(residence|citizenship|birth)\b|^country$|\bwhich\s+country\b|\byour\s+country\b|\bnationality\b|\bcountry\s*\/\s*region\b/i,
+      key: "country",
+      confidence: 0.96
+    },
+    {
+      re: /\bstate\s+or\s+province\b|\bprovince\s+or\s+state\b|\bstate\s*\/\s*province\b|\bmailing\s+state\b|\bstate\s+of\s+residence\b|\bprovince\/region\b/i,
+      key: "state",
+      confidence: 0.96
+    },
+    {
+      re: /\bgender\b|legal\s+sex|your\s+gender|gender\s+identity|sex\s*\(/i,
+      key: "eeo_gender",
+      confidence: 0.96
+    },
+    {
+      re: /\brace\b|\bethnicity\b|race\s+or\s+ethnicity|ethnic\s+background|hispanic\s+or\s+latino|racial\s+or\s+ethnic|minority\s+status/i,
+      key: "eeo_race",
+      confidence: 0.96
+    },
+    {
+      re: /\bveteran\b|veteran\s+status|military\s+status|armed\s+forces|military\s+service|protected\s+veteran|uniformed\s+service/i,
+      key: "eeo_veteran",
+      confidence: 0.96
+    },
+    {
+      re: /\bdisability\b|disability\s+status|\bada\b|reasonable\s+accommodation|physical\s+or\s+mental\s+disabilit/i,
+      key: "eeo_disability",
+      confidence: 0.95
+    },
+    {
+      re: /\byears?\s+of\s+(professional\s+)?experience\b|total\s+years\s+of\s+experience|how\s+many\s+years\s+.+experience|\byoe\b|length\s+of\s+professional\s+experience|professional\s+experience\s+\(/i,
+      key: "years_of_experience",
+      confidence: 0.94
+    },
+    {
+      re: /\bsalary\b|\bcompensation\b|expected\s+compensation|desired\s+pay|pay\s+expectation|base\s+salary|usd\s+per/i,
+      key: "salary_expectations",
+      confidence: 0.93,
+      unless: /sponsorship|visa|authorized|eligible\s+to\s+work/i
+    },
+    {
+      re: /\bnotice\s+period\b|how\s+much\s+notice|earliest\s+start|when\s+can\s+you\s+start|availability\s+to\s+start|available\s+to\s+start/i,
+      key: "start_date_availability",
+      confidence: 0.92
+    },
+    {
+      re: /\bmobile\s+phone\b|\bphone\s+number\b|\bcontact\s+number\b|\bcell\s*phone\b|^phone$/i,
+      key: "phone_local",
+      confidence: 0.93,
+      unless: /country|extension|device|type|dial|code\b/i
+    },
+    {
+      re: /\bcity\b|\blocation\b(?!\s+type)|\bmetro\s+area\b|where\s+are\s+you\s+based|\bmailing\s+city\b/i,
+      key: "city",
+      confidence: 0.89,
+      unless: /country(\s+of)?|state|province|zip|postal|region\s*$/i
+    },
+    {
+      re: /\bcover\s+letter\b|additional\s+comments|why\s+(are\s+you|do\s+you)\s+(interested|applying)/i,
+      key: "cover_letter",
+      confidence: 0.92
+    }
+  ];
+
+  const INTENT_LAYER_MIN_CONFIDENCE = 0.92;
+
+  function matchIntentLabel(metaText, profile) {
+    if (!metaText || metaText.length < 2) return null;
+    for (const rule of INTENT_LABEL_RULES) {
+      if (rule.unless && rule.unless.test(metaText)) continue;
+      if (!rule.re.test(metaText)) continue;
+      const value = resolveValue(rule.key, profile, metaText);
+      if (value === undefined || value === null) continue;
+      const str = Array.isArray(value) ? value.join(", ") : String(value);
+      if (!str.trim()) continue;
+      return { key: rule.key, value: str, confidence: rule.confidence };
+    }
+    return null;
+  }
+
+  /** Same label text pipeline as scoreField — used by form-detector before semantic / generic match. */
+  function matchIntentFromMetadata(meta, profile) {
+    const isChoice = metaIsChoiceLike(meta);
+    const metaText = metadataToText(meta, isChoice);
+    return matchIntentLabel(metaText, profile);
+  }
+
   function scoreField(meta, profile, threshold = 0.38) {
     const isChoice = metaIsChoiceLike(meta);
     const metaText = metadataToText(meta, isChoice);
@@ -370,22 +480,9 @@
       if (value) return { key: "full_name", value: String(value), confidence: 1 };
     }
 
-    // Sponsorship vs work authorization: overlapping vocabulary on real forms.
-    if (
-      /\b(require|need|will you).{0,50}sponsor/i.test(metaText) ||
-      /\bvisa sponsorship|sponsorship for employment|immigration sponsorship|employment sponsorship/i.test(metaText) ||
-      /\bh[- ]?1b|h1b\b/i.test(metaText)
-    ) {
-      const value = resolveValue("requires_sponsorship", profile, metaText);
-      if (value) return { key: "requires_sponsorship", value: String(value), confidence: 0.98 };
-    }
-    if (
-      /\b(legally )?authorized to work|eligible to work|right to work|work authorization status|permit to work/i.test(metaText) &&
-      !/\bsponsor/i.test(metaText)
-    ) {
-      const value = resolveValue("work_authorization", profile, metaText);
-      if (value) return { key: "work_authorization", value: String(value), confidence: 0.98 };
-    }
+    // Intent is applied in form-detect (before semantic) and here as fallback if called alone.
+    const intentFallback = matchIntentLabel(metaText, profile);
+    if (intentFallback && intentFallback.confidence >= INTENT_LAYER_MIN_CONFIDENCE) return intentFallback;
 
     const candidates = [];
 
@@ -529,6 +626,10 @@
     normalize,
     scoreField,
     maybeSemanticValue,
+    matchIntentLabel,
+    matchIntentFromMetadata,
+    INTENT_LABEL_RULES,
+    INTENT_LAYER_MIN_CONFIDENCE,
     similarity,
     splitFullName,
     interpolateCoverLetter,

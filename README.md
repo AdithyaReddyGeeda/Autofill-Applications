@@ -14,11 +14,14 @@ Applying to jobs means retyping the same information hundreds of times across do
 ## Key Features
 
 - **100% local storage** — profile data never leaves your machine; uses `chrome.storage.local` only
-- **Intelligent field matching** — fuzzy token scoring with Levenshtein distance, synonym expansion, and semantic inference (e.g. mapping "3 years" to a "Years of Experience" dropdown)
-- **Custom dropdown support** — handles ARIA comboboxes, listboxes, radio groups, async-rendered menus, and platform-specific widgets (Workday `selectWidget`, Greenhouse, etc.)
+- **Intelligent field matching** — fuzzy token scoring with Levenshtein distance, synonym expansion, intent rules, and semantic inference (e.g. mapping experience to “years of experience” controls)
+- **Custom dropdown support** — handles ARIA comboboxes, listboxes, radio groups, async-rendered menus, and platform-specific widgets (Workday `selectWidget`, Greenhouse, LinkedIn listboxes, etc.)
 - **React-compatible event dispatch** — uses native property setters and `InputEvent` to survive React/Radix re-renders that revert plain `.value` assignments
 - **Confidence-gated fills** — skips low-confidence matches instead of guessing; reports structured warnings in debug mode
 - **Fill preview & dry-run mode** — review what will be filled before committing; undo support to revert changes
+- **LinkedIn Easy Apply** — scoped to the active modal step; optional multi-step navigation via **Next** (never Submit/Review/Dismiss); stops when review or submit is shown, or when required fields block progression
+- **Workday** — dedicated fill pass for custom controls, dynamic rescan waves after fills for conditional fields, optional final pass; progression stops if visible required fields stay empty
+- **Required-field awareness** — shared detection (`required-fields.js`) for HTML/`aria` required markers and label asterisks; logs to console and highlights controls in **visual debug** mode when progression stops
 - **Multiple resume variants** — store different resumes tagged by role; switch active resume from the popup
 - **EEO / voluntary self-ID** — fills gender, race/ethnicity, veteran status, and disability fields when profile data is available
 - **Security guardrails** — warns on HTTP pages, blocks fills into sensitive fields (SSN, bank, passport)
@@ -30,15 +33,15 @@ The extension uses a generic detection strategy that works on most form-based pa
 
 | Site | Text Inputs | Native `<select>` | Custom Dropdowns | ARIA Radios | Notes |
 |---|:---:|:---:|:---:|:---:|---|
-| **Workday** | Yes | Yes | Yes | Yes | `data-automation-id` selectors, `selectWidget` / `promptOption` / combobox input |
+| **Workday** | Yes | Yes | Yes | Yes | `data-automation-id` selectors, `selectWidget` / combobox; dynamic rescans; required-field gate before further passes |
 | **Greenhouse** | Yes | Yes | Yes | Yes | Custom listbox with `role="option"` |
 | **Lever** | Yes | Yes | Yes | Yes | Custom combobox triggers |
 | **Ashby** | Yes | Yes | Yes | Yes | Radix-style ARIA radio groups, custom comboboxes |
-| **LinkedIn** | Yes | Yes | Partial | Yes | Easy Apply forms; some multi-step flows may not trigger |
+| **LinkedIn** | Yes | Yes | Yes | Yes | Easy Apply: step-scoped match, multi-step **Next** flow, submit/review not auto-clicked (`AUTO_SUBMIT_LINKEDIN = false`) |
 | **Indeed** | Yes | Yes | Partial | Yes | Standard apply flow supported; some embedded iframes may block |
 | **Other ATS / custom sites** | Yes | Yes | Best-effort | Best-effort | Generic ARIA + CSS heuristic detection |
 
-> **Partial** means the extension fills most fields but some edge cases (multi-step modals, iframes with strict CSP) may require manual input.
+> **Partial** means the extension fills most fields but some edge cases (strict CSP iframes, unusual widgets) may require manual input.
 
 ## How It Works
 
@@ -48,35 +51,57 @@ The extension uses a generic detection strategy that works on most form-based pa
 │ finds fields │     │ scores matches│     │ opens/picks  │     │ sets values &  │
 │ on the page  │     │ against profile│    │ dropdown opts│     │ dispatches evts│
 └─────────────┘     └───────────────┘     └──────────────┘     └────────────────┘
+         ▲                                        ▲
+         │ optional root scope                     │
+         └────────────────────────────────────────┘
 ```
 
-1. **Detection** — `form-detector.js` scans the DOM for inputs, selects, textareas, ARIA widgets, and custom dropdown triggers. It reads labels, `aria-label`, `name`, `id`, `data-automation-id`, and nearby text to build metadata for each field.
+1. **Detection** — `form-detector.js` scans the DOM for inputs, selects, textareas, ARIA widgets, and custom dropdown triggers. Optional **`root`** scopes scanning to a subtree (e.g. the active LinkedIn Easy Apply step). It reads labels, `aria-label`, `name`, `id`, `data-automation-id`, and nearby text to build metadata for each field.
 
-2. **Matching** — `data-matcher.js` scores each field's metadata against your stored profile using a multi-tier strategy: exact token match, synonym expansion, prefix/contains match, alpha-only normalization, and Levenshtein distance. Fields scoring above the configurable threshold (default 0.38) are queued for filling.
+2. **Matching** — `data-matcher.js` scores each field's metadata against your stored profile: high-confidence intent rules, token match, synonym expansion, and Levenshtein distance. Fields scoring above the configurable threshold (default **0.38**) are queued for filling.
 
 3. **Site-specific handling** — `site-handlers.js` checks the current hostname against a registry of known ATS platforms. When matched, it uses platform-specific selectors and interaction sequences (click to open, wait for async render, collect options, score, pick). Falls back to generic ARIA/CSS heuristics otherwise.
 
-4. **Fill execution** — `content-script.js` sets values using native prototype setters (`HTMLInputElement.prototype.value.set`) and dispatches a realistic event sequence (`focus` → `input` → `change` → `blur`) so React, Angular, and other frameworks detect the change.
+4. **LinkedIn Easy Apply** — `linkedin-easy-apply.js` finds the modal, the visible step container, and footer actions (Next vs Review vs Submit). `required-fields.js` validates before each **Next** and after each step fill.
 
-5. **Safety** — Options scoring below the confidence threshold (0.45) are skipped. Disabled, hidden, placeholder, and duplicate options are filtered out. A structured warning is logged for every skipped field.
+5. **Fill execution** — `content-script.js` sets values using native prototype setters (`HTMLInputElement.prototype.value.set`) and dispatches a realistic event sequence (`focus` → `input` → `change` → `blur`) so React, Angular, and other frameworks detect the change.
+
+6. **Safety** — Fills require matcher confidence ≥ **0.45** (`SAFE_MATCH_THRESHOLD`). Disabled, hidden, and placeholder options are filtered. Required fields that stay empty can **block** further LinkedIn steps or Workday rescans/final pass; reasons are **`console.warn`**’d and empty controls get **red outlines** when visual debug is on.
 
 ### File Structure
 
 ```
-├── manifest.json            # Manifest V3 config, permissions, content script registration
+├── manifest.json            # Manifest V3 — scripts: site-handlers, required-fields, linkedin-easy-apply, …
 ├── background.js            # Service worker — messaging, context menu, keyboard shortcut
-├── content-script.js        # Core fill logic, event dispatch, dropdown pickers, debug mode
-├── form-detector.js         # DOM scanning, field metadata extraction, candidate filtering
-├── data-matcher.js          # Profile-to-field scoring, token matching, Levenshtein distance
+├── content-script.js        # Core fill logic, Workday/LinkedIn orchestration, event dispatch, debug marks
+├── form-detector.js         # DOM scanning, optional root scope, metadata extraction
+├── data-matcher.js          # Profile-to-field scoring, intent rules, Levenshtein distance
 ├── field-config.js          # Per-platform CSS selectors, dropdown trigger definitions
-├── site-handlers.js         # Site-specific open/collect/pick logic for 6 ATS platforms
+├── required-fields.js       # Shared required-field detection (HTML/ARIA/label *)
+├── linkedin-easy-apply.js   # LinkedIn modal/step helpers, delegates required checks to required-fields
+├── site-handlers.js         # Site-specific open/collect/pick for Workday, Greenhouse, LinkedIn, Indeed, …
 ├── popup.html / popup.js    # Side panel UI — fill, dry-run, undo, resume selector, history
 ├── popup-settings.html/.js  # Settings page — profile, resumes, education, experience, EEO
 ├── sidepanel.html           # Side panel entry point
 ├── styles.css               # In-page floating button styles
-├── test-pages/              # 8 local HTML fixtures for manual regression testing
+├── test-pages/              # Local HTML fixtures for manual regression testing
 └── icons/                   # Extension icons
 ```
+
+### Debug mode
+
+Enable detailed console diagnostics (extension **Dev Mode** in settings, or in-page):
+
+```js
+// Browser console on the job application page:
+enableAutofillDebug()
+disableAutofillDebug()
+
+// Verbose LinkedIn Easy Apply step logs:
+window.__linkedinEaDebug = true
+```
+
+With dev mode on, the extension also applies **green / yellow / red** outlines and tooltips on fields unless `window.__autofillVisualDebug === false`. Red **fail** marks are used when required-field gating stops progression.
 
 ## Installation
 
@@ -151,32 +176,20 @@ Local HTML test pages in `test-pages/` simulate the field types this extension h
 | React controlled inputs persist (no revert) | `react-controlled` |
 | `input` and `change` events fire for every field | All pages (check Event log) |
 
-### Debug mode
-
-Enable detailed console diagnostics for dropdown autofill:
-
-```js
-// In the browser console on any page:
-enableAutofillDebug()
-
-// Logs grouped output per field: trigger, options found, top 5 candidates with scores, outcome.
-// Disable with:
-disableAutofillDebug()
-```
-
 ## Known Limitations
 
-- **Multi-step apply flows** — the extension fills the visible form; if a portal loads new sections via JavaScript navigation without a page reload, you may need to click Fill again for each step.
+- **Required markers** — some sites don’t use `required` / `aria-required` or label asterisks consistently; the gate may miss “soft” required questions until the portal shows validation errors.
 - **Cross-origin iframes** — some ATS platforms embed forms in iframes with restrictive Content Security Policy. The extension runs in `all_frames` but cannot bypass CSP-blocked frames.
-- **File upload fields** — resume file inputs (`<input type="file">`) cannot be filled programmatically due to browser security restrictions. You'll still need to upload files manually.
+- **File upload fields** — resume file inputs (`<input type="file">`) cannot be filled programmatically due to browser security restrictions. Required file fields block progression until you upload manually.
 - **CAPTCHA / bot detection** — the extension dispatches realistic DOM events, but some sites may flag rapid form fills. Using dry-run mode first can help.
 - **Dynamic field IDs** — some platforms generate random field IDs on each page load. The extension relies on labels and ARIA attributes rather than IDs, but edge cases exist.
+- **LinkedIn / Workday DOM changes** — class names and automation IDs can shift; open an issue with a screenshot if a flow regresses.
 
 ## Roadmap
 
 - [ ] Chrome Web Store publishing with proper review
 - [ ] In-page fill preview modal (replace `confirm` dialog)
-- [ ] Auto-detect multi-step flows and fill new sections automatically
+- [x] Multi-step LinkedIn Easy Apply with scoped steps and safety stops (ongoing tuning)
 - [ ] Field-level confidence indicators in the UI
 - [ ] Profile templates (e.g. "Frontend role" vs "Backend role" with different skills/summary)
 - [ ] Import profile from LinkedIn PDF export

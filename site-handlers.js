@@ -48,6 +48,23 @@
     try { if (typeof el.click === "function") el.click(); } catch { /* ignore */ }
   }
 
+  /**
+   * Prefer native click(), then synthetic MouseEvents (Workday sometimes needs both).
+   */
+  function workdayOptionClick(el) {
+    if (!el) return;
+    try {
+      if (typeof el.click === "function") el.click();
+    } catch { /* ignore */ }
+    const { cx, cy } = visibleCenter(el);
+    const shared = { bubbles: true, cancelable: true, composed: true, view: window, clientX: cx, clientY: cy };
+    try {
+      el.dispatchEvent(new MouseEvent("mousedown", { ...shared, button: 0, buttons: 1 }));
+      el.dispatchEvent(new MouseEvent("mouseup", { ...shared, button: 0, buttons: 0 }));
+      el.dispatchEvent(new MouseEvent("click", { ...shared, button: 0 }));
+    } catch { /* ignore */ }
+  }
+
   function optionVisible(node) {
     const r = node.getBoundingClientRect?.();
     return r && r.width > 1 && r.height > 1;
@@ -73,6 +90,14 @@
 
   function isPlaceholder(text) {
     return !text || text.length > 500 || PLACEHOLDER.test(text);
+  }
+
+  /** Workday listbox rows often use these labels instead of generic placeholders. */
+  function isWorkdayListPlaceholder(text) {
+    const t = (text || "").replace(/\s+/g, " ").trim();
+    if (!t) return true;
+    if (isPlaceholder(t)) return true;
+    return /^(select\s+one|choose(\s+one)?|choose\s+an?\s+option)$/i.test(t);
   }
 
   /** Returns true when an option node should be excluded from scoring. */
@@ -139,6 +164,9 @@
 
     triggers: [
       '[data-automation-id="selectWidget"]',
+      'input[role="combobox"]',
+      '[role="combobox"][aria-haspopup="listbox"]',
+      '[aria-haspopup="listbox"]',
       'div[id*="dropDownSelectList"]',
       'button[data-automation-id="selectWidget"]',
       'button[data-automation-id*="dropDown"]',
@@ -201,42 +229,32 @@
     },
 
     collectOptions() {
-      const gather = (requireVisible) => {
-        const seen = new Set();
-        const out = [];
-        const push = (node, textOverride) => {
-          if (!node || seen.has(node)) return;
-          if (node.closest?.('[data-automation-id="selectedItem"]')) return;
-          if (requireVisible && !optionVisible(node)) return;
-          if (node.getAttribute("aria-disabled") === "true") return;
-          if (node.hasAttribute("disabled")) return;
-          const style = node.getAttribute("style") || "";
-          if (/display\s*:\s*none/i.test(style)) return;
-          seen.add(node);
-          const text = textOverride || cleanText(node);
-          if (isPlaceholder(text)) return;
-          out.push({ node, text });
-        };
-        for (const sel of this.options.items) {
-          document.querySelectorAll(sel).forEach((n) => {
-            if (sel.includes("promptOption")) {
-              const opt = n.closest("[role=option]") || n;
-              push(opt, (n.getAttribute("data-automation-label") || "").trim() || cleanText(opt));
-            } else {
-              push(n);
-            }
-          });
-        }
-        return out;
+      const seen = new Set();
+      const out = [];
+      const push = (node, textOverride) => {
+        if (!node || seen.has(node)) return;
+        if (node.closest?.('[data-automation-id="selectedItem"]')) return;
+        if (!optionVisible(node)) return;
+        if (node.getAttribute("aria-disabled") === "true") return;
+        if (node.hasAttribute("disabled")) return;
+        const style = node.getAttribute("style") || "";
+        if (/display\s*:\s*none/i.test(style)) return;
+        seen.add(node);
+        const text = textOverride || cleanText(node);
+        if (isWorkdayListPlaceholder(text)) return;
+        out.push({ node, text });
       };
-
-      // Strict pass: require bounding-rect visibility
-      const strict = gather(true);
-      if (strict.length) return strict;
-
-      // Relaxed pass: options may be in the DOM but still animating (0×0 rect)
-      ddLog("workday: strict visibility found 0 options, trying relaxed pass");
-      return gather(false);
+      for (const sel of this.options.items) {
+        document.querySelectorAll(sel).forEach((n) => {
+          if (sel.includes("promptOption")) {
+            const opt = n.closest("[role=option]") || n;
+            push(opt, (n.getAttribute("data-automation-label") || "").trim() || cleanText(opt));
+          } else {
+            push(n);
+          }
+        });
+      }
+      return out;
     },
 
     /** Read the currently displayed value in a trigger widget. */
@@ -251,12 +269,11 @@
 
     async pick(optionEl) {
       const radio = optionEl.querySelector?.('input[type="radio"]');
-      if (radio) {
-        radio.focus?.();
-        pointerClick(radio);
-      } else {
-        pointerClick(optionEl);
-      }
+      const target = radio || optionEl;
+      try {
+        target.focus?.();
+      } catch { /* ignore */ }
+      workdayOptionClick(target);
       await sleep(280);
     },
 
@@ -531,6 +548,70 @@
     async pick(optionEl) {
       pointerClick(optionEl);
       await sleep(150);
+    },
+
+    /**
+     * LinkedIn Jobs "Easy Apply" multi-step modal — used by the content script
+     * to advance steps after each fill wave.
+     */
+    easyApply: {
+      maxSteps: 15,
+      nextStepDelayMs: 1200,
+
+      isActive() {
+        if (!/linkedin\.com/i.test(host())) return false;
+        return Boolean(this.getModalRoot());
+      },
+
+      getModalRoot() {
+        return (
+          document.querySelector(".jobs-easy-apply-modal") ||
+          document.querySelector('[data-test-modal][class*="easy-apply"]') ||
+          document.querySelector(".jobs-easy-apply-content") ||
+          document.querySelector('[class*="jobs-easy-apply-footer"]')?.closest?.("div[role='dialog'], .jobs-easy-apply-modal") ||
+          null
+        );
+      },
+
+      /** Visible "Submit" / "Submit application" primary action (final step). */
+      findSubmitButton() {
+        const root = this.getModalRoot() || document.body;
+        const buttons = [...root.querySelectorAll('button[type="submit"], button.artdeco-button--primary, button')];
+        for (const btn of buttons) {
+          if (!btn || btn.disabled) continue;
+          try {
+            if (btn.offsetParent === null && btn.getBoundingClientRect().height < 1) continue;
+          } catch {
+            continue;
+          }
+          const t = cleanText(btn).toLowerCase();
+          if (!t) continue;
+          if (/^submit(\s|$)/.test(t) || t.includes("submit application") || t.includes("submit your application")) {
+            return btn;
+          }
+        }
+        return null;
+      },
+
+      /** Primary "Next" to advance one step (never Submit). */
+      findNextButton() {
+        const root = this.getModalRoot() || document.body;
+        const buttons = [...root.querySelectorAll("button[data-easy-apply-next-button], button.artdeco-button--primary, button")];
+        for (const btn of buttons) {
+          if (!btn || btn.disabled) continue;
+          try {
+            if (btn.offsetParent === null && btn.getBoundingClientRect().height < 1) continue;
+          } catch {
+            continue;
+          }
+          if (btn.getAttribute("data-easy-apply-next-button") != null) return btn;
+          const t = cleanText(btn).toLowerCase();
+          if (t === "next" || /^next\b/.test(t)) {
+            if (!/submit/.test(t)) return btn;
+          }
+        }
+        return null;
+      }
     }
   };
 
@@ -625,9 +706,9 @@
     await handler.open(trigger);
 
     // Collect options with progressive backoff retries.
-    // Real Workday popups render asynchronously and can take 1-3 seconds.
+    // Workday: wait 200–400ms before first read so list items can paint; then backoff up to ~1.5s.
     const retryDelays = handler.id === "workday"
-      ? [0, 500, 800, 1200, 1500]
+      ? [320, 520, 800, 1200, 1500]
       : [0, 400];
 
     let opts = [];
@@ -638,9 +719,7 @@
     }
 
     // For non-Workday sites, apply the general safety filter.
-    // Workday's collectOptions already handles disabled/hidden/placeholder
-    // internally, so re-filtering would risk dropping options that passed
-    // the relaxed visibility fallback.
+    // Workday: collectOptions already enforces visible options + Workday placeholder filtering.
     if (handler.id !== "workday") {
       const seenTexts = new Set();
       opts = opts.filter((o) => !isOptionUnsafe(o.node, seenTexts));
@@ -659,11 +738,22 @@
       };
     }
 
-    const scored = opts.map((o) => {
-      const val = (o.node.getAttribute("data-value") || o.node.getAttribute("value") || "").trim();
-      const s = Math.max(scoreFn(wanted, val, o.text), scoreFn(wanted, "", o.text));
-      return { node: o.node, text: o.text, score: s };
-    }).sort((a, b) => b.score - a.score);
+    const normLabel = (x) => (x || "").toLowerCase().replace(/\s+/g, " ").trim();
+    const wantedNorm = normLabel(wanted);
+    const scored = opts
+      .map((o) => {
+        const val = (o.node.getAttribute("data-value") || o.node.getAttribute("value") || "").trim();
+        const s = Math.max(scoreFn(wanted, val, o.text), scoreFn(wanted, "", o.text));
+        return { node: o.node, text: o.text, score: s };
+      })
+      .sort((a, b) => {
+        if (handler.id === "workday" && wantedNorm) {
+          const exactA = wantedNorm === normLabel(a.text);
+          const exactB = wantedNorm === normLabel(b.text);
+          if (exactA !== exactB) return exactA ? -1 : 1;
+        }
+        return b.score - a.score;
+      });
 
     const best = scored[0];
     if (!best || best.score < SAFE_THRESHOLD) {
@@ -764,6 +854,8 @@
     WORKDAY_QUESTION_MAP,
     workdayMatchLabel,
     isWorkday: () => workday.match(),
-    workdayHandler: workday
+    workdayHandler: workday,
+    linkedinEasyApply: linkedin.easyApply,
+    isLinkedInEasyApply: () => linkedin.easyApply.isActive()
   };
 })();

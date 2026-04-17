@@ -23,6 +23,15 @@
    * increases recall at the cost of occasional wrong selections.
    */
   const SAFE_MATCH_THRESHOLD = 0.45;
+  /** Subtracted from SAFE_MATCH_THRESHOLD when retrying a pick after value did not stick. */
+  const STICK_RETRY_THRESHOLD_DELTA = 0.12;
+
+  /** Matcher confidence must meet this bar before we auto-fill (detector threshold may be lower). */
+  function matchConfidenceEligible(m) {
+    const c = Number(m?.confidence);
+    if (Number.isNaN(c)) return false;
+    return c >= SAFE_MATCH_THRESHOLD;
+  }
 
   // ---------------------------------------------------------------------------
   //  Debug mode
@@ -34,11 +43,86 @@
   //  When enabled, every dropdown / radio / select fill attempt logs a
   //  collapsed console group showing: field label, desired value, field type,
   //  trigger summary, options found, top-5 candidates with scores, and the
-  //  outcome (picked / skipped + reason).
+  //  outcome (picked / skipped + reason). With visual debug (default on), the
+  //  page also shows green / yellow / red outlines and title tooltips on fields.
   // ---------------------------------------------------------------------------
 
   function isDebug() {
     return Boolean(STATE.settings?.devMode) || Boolean(window.__autofillDebug);
+  }
+
+  /**
+   * Visual outlines + native tooltips on fields when debug is on.
+   * Set window.__autofillVisualDebug = false to keep console logs only.
+   */
+  function visualDebugEnabled() {
+    if (!isDebug()) return false;
+    return window.__autofillVisualDebug !== false;
+  }
+
+  const DEBUG_MARK_ATTR = "data-job-autofill-debug-mark";
+
+  function ensureDebugOverlayStyles() {
+    if (document.getElementById("job-autofill-debug-overlay-style")) return;
+    const st = document.createElement("style");
+    st.id = "job-autofill-debug-overlay-style";
+    st.textContent = `
+      [${DEBUG_MARK_ATTR}="ok"] {
+        outline: 2px solid rgba(34, 197, 94, 0.95) !important;
+        outline-offset: 2px !important;
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14) !important;
+        border-radius: 3px;
+      }
+      [${DEBUG_MARK_ATTR}="warn"] {
+        outline: 2px solid rgba(234, 179, 8, 0.98) !important;
+        outline-offset: 2px !important;
+        box-shadow: 0 0 0 3px rgba(234, 179, 8, 0.14) !important;
+        border-radius: 3px;
+      }
+      [${DEBUG_MARK_ATTR}="fail"] {
+        outline: 2px solid rgba(239, 68, 68, 0.98) !important;
+        outline-offset: 2px !important;
+        box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.14) !important;
+        border-radius: 3px;
+      }
+      [${DEBUG_MARK_ATTR}] { cursor: help; }
+    `;
+    (document.head || document.documentElement).appendChild(st);
+  }
+
+  function clearDebugVisualMarks() {
+    document.querySelectorAll(`[${DEBUG_MARK_ATTR}]`).forEach((el) => {
+      el.removeAttribute(DEBUG_MARK_ATTR);
+      const rest = el.getAttribute("data-job-autofill-dbg-title-restore");
+      if (rest != null) {
+        if (rest) el.setAttribute("title", rest);
+        else el.removeAttribute("title");
+        el.removeAttribute("data-job-autofill-dbg-title-restore");
+      }
+    });
+  }
+
+  /**
+   * @param {"ok"|"warn"|"fail"} kind
+   * @param {{ profileKey?: string, confidence?: number, note?: string }} info
+   */
+  function applyDebugVisualMark(el, kind, info = {}) {
+    if (!visualDebugEnabled() || !el || el.nodeType !== 1) return;
+    ensureDebugOverlayStyles();
+    if (!el.hasAttribute("data-job-autofill-dbg-title-restore")) {
+      el.setAttribute("data-job-autofill-dbg-title-restore", el.getAttribute("title") || "");
+    }
+    const c = info.confidence;
+    const confStr =
+      c != null && c !== "" && !Number.isNaN(Number(c)) ? Number(c).toFixed(3) : "—";
+    const lines = [
+      "[Job Autofill]",
+      `key: ${info.profileKey != null && info.profileKey !== "" ? info.profileKey : "—"}`,
+      `confidence: ${confStr}`
+    ];
+    if (info.note) lines.push(`note: ${info.note}`);
+    el.setAttribute("title", lines.join("\n"));
+    el.setAttribute(DEBUG_MARK_ATTR, kind);
   }
 
   function ddLog(...args) {
@@ -88,7 +172,7 @@
    * Log a rich, grouped diagnostic block for a single dropdown fill attempt.
    * Only produces output when debug mode is on.
    */
-  /** One-line per-field debug for the main fill + progressive rescan (when dev mode is on). */
+  /** One-line per-field debug for the main fill + multi-pass redetect (when dev mode is on). */
   function logFillMatchDebug({
     label,
     fieldType,
@@ -155,6 +239,13 @@
       outcome: "skipped",
       reason: warn.reason
     });
+    if (visualDebugEnabled() && warn.trigger && warn.trigger.nodeType === 1) {
+      applyDebugVisualMark(warn.trigger, "warn", {
+        profileKey: warn.profileKey != null ? warn.profileKey : warn.reason,
+        confidence: warn.confidence ?? warn.bestScore,
+        note: warn.reason
+      });
+    }
   }
 
   function drainFillWarnings() {
@@ -498,6 +589,52 @@
       .trim();
   }
 
+  /**
+   * Read the visible / committed value from a control after a fill attempt.
+   * Used to verify native selects, combobox inputs, and custom dropdown triggers.
+   */
+  function readDisplayedValue(el) {
+    if (!el || el.nodeType !== 1) return "";
+    const tag = el.tagName?.toLowerCase();
+    const type = (el.type || "").toLowerCase();
+    if (tag === "select") {
+      try {
+        const opt = el.selectedOptions?.[0];
+        if (opt) return (opt.textContent || "").replace(/\s+/g, " ").trim() || String(opt.value || "").trim();
+      } catch { /* ignore */ }
+      return String(el.value || "").trim();
+    }
+    if (tag === "input") {
+      const v = String(el.value || "").trim();
+      const avt = (el.getAttribute("aria-valuetext") || "").trim();
+      return v || avt;
+    }
+    if (tag === "textarea") return String(el.value || "").trim();
+    const selected = el.querySelector?.('[data-automation-id="selectedItem"]');
+    if (selected) return (selected.textContent || "").replace(/\s+/g, " ").trim();
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    if (role === "combobox" || el.getAttribute("aria-haspopup")) {
+      const avt = (el.getAttribute("aria-valuetext") || "").trim();
+      if (avt) return avt;
+    }
+    return (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 240);
+  }
+
+  /**
+   * Returns true if the control's current display matches the desired value
+   * (normalized; allows substring / fuzzy agreement).
+   */
+  function didValueStick(el, expectedValue) {
+    const exp = normChoice(expectedValue);
+    if (!exp) return true;
+    const raw = readDisplayedValue(el);
+    const got = normChoice(raw);
+    if (!got) return false;
+    if (got === exp) return true;
+    if (got.includes(exp) || exp.includes(got)) return true;
+    return scoreChoiceMatch(expectedValue, "", raw) >= 0.82;
+  }
+
   /** Strip ALL non-alphanumeric characters for ultra-fuzzy comparison. */
   function alphaOnly(s) {
     return s.replace(/[^a-z0-9]/g, "");
@@ -616,7 +753,7 @@
    * Pick the best <option> inside a native <select> for a given wanted value.
    * Returns { option, score } or null.
    */
-  function pickBestSelectOption(selectEl, wanted) {
+  function pickBestSelectOption(selectEl, wanted, minScore = SAFE_MATCH_THRESHOLD) {
     const w = String(wanted || "").trim();
     if (!w) return null;
     const seenTexts = new Set();
@@ -634,13 +771,15 @@
       score: scoreChoiceMatch(w, opt.value, opt.textContent)
     })).sort((a, b) => b.score - a.score);
     const best = scored[0];
-    if (!best || best.score < SAFE_MATCH_THRESHOLD) {
-      addFillWarning({
-        trigger: selectEl, wanted: w, reason: "native-select-low-confidence",
-        label: selectEl.getAttribute("aria-label") || selectEl.name || "",
-        fieldType: "native-select", bestText: best?.text, bestScore: best?.score,
-        topCandidates: scored.slice(0, 5)
-      });
+    if (!best || best.score < minScore) {
+      if (minScore >= SAFE_MATCH_THRESHOLD - 1e-6) {
+        addFillWarning({
+          trigger: selectEl, wanted: w, reason: "native-select-low-confidence",
+          label: selectEl.getAttribute("aria-label") || selectEl.name || "",
+          fieldType: "native-select", bestText: best?.text, bestScore: best?.score,
+          topCandidates: scored.slice(0, 5)
+        });
+      }
       return null;
     }
     logDropdownAttempt({
@@ -658,6 +797,177 @@
   function isWorkdayJobsHost() {
     const h = window.location.hostname;
     return /workday\./i.test(h) || /myworkdayjobs\.com/i.test(h);
+  }
+
+  /** MyWorkdayJobs / WD hosts — enables DOM-native Workday dropdown flow (selectWorkdayOption). */
+  function isWorkdayHostnameIncludesWorkday() {
+    return /workday/i.test(window.location.hostname || "");
+  }
+
+  function workdayMwOptionVisible(el) {
+    return Boolean(el && el.offsetParent !== null);
+  }
+
+  function workdayMwOptionLabelText(node) {
+    const inner = node.querySelector?.('[data-automation-id="promptOption"]');
+    if (inner) {
+      const lab = (inner.getAttribute("data-automation-label") || "").trim();
+      if (lab) return lab;
+    }
+    return (node.textContent || "").replace(/\s+/g, " ").trim();
+  }
+
+  function isWorkdayMwPlaceholderLabel(text) {
+    const t = normChoice(text);
+    if (!t) return true;
+    if (PLACEHOLDER_PATTERN.test(text)) return true;
+    if (/^(select\s+one|choose(\s+one)?)$/i.test(t)) return true;
+    return false;
+  }
+
+  /**
+   * Rank [role=option] nodes: exact (normalized) > substring > scoreChoiceMatch.
+   */
+  function rankWorkdayMwOptions(optionNodes, wanted) {
+    const w = String(wanted || "").trim();
+    const wn = normChoice(w);
+    const rows = [];
+    for (const node of optionNodes) {
+      if (isWorkdayOptionExcluded(node)) continue;
+      if (!workdayMwOptionVisible(node)) continue;
+      const rawText = workdayMwOptionLabelText(node);
+      if (isWorkdayMwPlaceholderLabel(rawText)) continue;
+      const tn = normChoice(rawText);
+      let tier = 0;
+      if (wn && tn === wn) tier = 3;
+      else if (w && (rawText.includes(w) || w.includes(rawText.trim()))) tier = 2;
+      else if (wn && tn && (tn.includes(wn) || wn.includes(tn))) tier = 1;
+      const base = scoreChoiceMatch(wanted, "", rawText);
+      const score = tier >= 2 ? base + tier * 0.05 : base;
+      rows.push({ node, text: rawText, score, tier });
+    }
+    rows.sort((a, b) => b.tier - a.tier || b.score - a.score);
+    return rows;
+  }
+
+  function clickWorkdayMwOptionNode(node) {
+    if (!node) return;
+    const radio = node.querySelector?.('input[type="radio"]');
+    const el = radio || node;
+    try {
+      el.focus?.();
+    } catch {
+      /* ignore */
+    }
+    try {
+      el.click();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Visible / committed label on a Workday trigger after selection (for verification). */
+  function getWorkdayValue(el) {
+    if (!el) return "";
+    return (
+      el.innerText ||
+      el.textContent ||
+      el.getAttribute("aria-valuetext") ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+  }
+
+  /**
+   * MyWorkdayJobs-style dropdown: open with trigger.click(), wait 300ms, match [role=option], verify, retry once.
+   * @param {{ skipOpenClick?: boolean }} [options] — set true when list is already open (e.g. combobox after typing).
+   */
+  async function selectWorkdayOption(trigger, value, options = {}) {
+    const skipOpenClick = options.skipOpenClick === true;
+    if (!isWorkdayHostnameIncludesWorkday()) return false;
+    const wanted = String(value || "").trim();
+    if (!wanted || !trigger) return false;
+
+    const attempt = async () => {
+      if (!skipOpenClick) {
+        try {
+          trigger.scrollIntoView({ block: "center", inline: "nearest" });
+        } catch {
+          /* ignore */
+        }
+        try {
+          trigger.click();
+        } catch {
+          /* ignore */
+        }
+        await sleep(300);
+      } else {
+        await sleep(200);
+      }
+
+      const optionEls = [...document.querySelectorAll('[role="option"]')];
+      const ranked = rankWorkdayMwOptions(optionEls, wanted);
+      const best =
+        ranked.find((r) => r.tier >= 2 || r.score >= SAFE_MATCH_THRESHOLD) ||
+        ranked[0];
+      if (!best || best.score < SAFE_MATCH_THRESHOLD) {
+        return { ok: false, ranked };
+      }
+      clickWorkdayMwOptionNode(best.node);
+      await sleep(180);
+      const expLower = wanted.trim().toLowerCase();
+      const gv = getWorkdayValue(trigger);
+      const textIncludesExpected = Boolean(expLower && gv.includes(expLower));
+      const stuck = didValueStick(trigger, wanted);
+      // Primary: trigger text reflects expected value; fallback: generic didValueStick (synonyms, etc.)
+      const ok = textIncludesExpected || stuck;
+      return { ok, ranked };
+    };
+
+    let rankedForLog = [];
+    let res = await attempt();
+    rankedForLog = res.ranked || [];
+    let ok = Boolean(res.ok);
+    if (!ok) {
+      res = await attempt();
+      rankedForLog = res.ranked || rankedForLog;
+      ok = Boolean(res.ok);
+    }
+
+    if (!ok) {
+      addFillWarning({
+        trigger,
+        wanted,
+        reason: "workday-dom-select-failed",
+        label: trigger.getAttribute("aria-label") || "",
+        fieldType: "workday-dropdown",
+        bestText: rankedForLog[0]?.text,
+        bestScore: rankedForLog[0]?.score,
+        topCandidates: rankedForLog.slice(0, 5)
+      });
+    }
+
+    logWorkdayAttempt({
+      label: "",
+      wanted,
+      selector: elSummary(trigger),
+      optionsFound: document.querySelectorAll('[role="option"]').length,
+      topCandidates: rankedForLog.slice(0, 5),
+      outcome: ok ? "picked" : "pick-failed",
+      valueStuck: ok
+    });
+    logDropdownAttempt({
+      label: trigger.getAttribute("aria-label") || "",
+      wanted,
+      fieldType: "workday-dropdown",
+      triggerEl: trigger,
+      scored: rankedForLog.slice(0, 5).map((r) => ({ text: r.text, score: r.score })),
+      outcome: ok ? "picked" : "skipped",
+      reason: ok ? null : "workday selectWorkdayOption"
+    });
+
+    return ok;
   }
 
   function isWorkdayDropdownTrigger(el) {
@@ -784,9 +1094,29 @@
     return scored.sort((a, b) => b.score - a.score);
   }
 
+  function clickWorkdayScoredEntry(entry) {
+    if (!entry?.node) return;
+    const target = entry.node;
+    const radio = target.querySelector?.('input[type="radio"]');
+    try {
+      if (radio) {
+        radio.focus?.();
+        dispatchFullPointerClick(radio);
+      } else {
+        dispatchFullPointerClick(target);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function pickAndClickWorkdayListOption(wantedRaw, triggerForVerify) {
     const wanted = String(wantedRaw || "").trim();
     if (!wanted) return false;
+
+    if (isWorkdayHostnameIncludesWorkday() && triggerForVerify) {
+      return selectWorkdayOption(triggerForVerify, wanted);
+    }
 
     // Progressive backoff: real Workday popups can take 1-3s to render options.
     let scored = [];
@@ -812,43 +1142,46 @@
       await sleep(120);
       return false;
     }
+    const retryMin = SAFE_MATCH_THRESHOLD - STICK_RETRY_THRESHOLD_DELTA;
     const target = best.node;
-    const radio = target.querySelector?.('input[type="radio"]');
-    try {
-      if (radio) {
-        radio.focus?.();
-        dispatchFullPointerClick(radio);
-      } else {
-        dispatchFullPointerClick(target);
-      }
-    } catch {
-      return false;
-    }
+    clickWorkdayScoredEntry(best);
     await sleep(280);
 
-    // Verify pick via site handler if available
-    const wdHandler = window.JobAutofillSiteHandlers?.workdayHandler;
-    let verified = true;
-    if (triggerForVerify && wdHandler?.verifyPick) {
-      verified = wdHandler.verifyPick(triggerForVerify, best.text);
-      if (!verified) {
-        logWorkdayAttempt({
-          label: "", wanted, selector: elSummary(triggerForVerify),
-          optionsFound: scored.length, topCandidates: scored.slice(0, 5),
-          outcome: "retry", valueStuck: false
-        });
-        // Retry once: re-collect and re-pick
-        await sleep(300);
-        const retry = collectWorkdayListScores(wanted);
-        const retryBest = retry[0];
-        if (retryBest && retryBest.score >= SAFE_MATCH_THRESHOLD) {
-          const rRadio = retryBest.node.querySelector?.('input[type="radio"]');
-          if (rRadio) { rRadio.focus?.(); dispatchFullPointerClick(rRadio); }
-          else { dispatchFullPointerClick(retryBest.node); }
-          await sleep(280);
-          verified = wdHandler.verifyPick(triggerForVerify, retryBest.text);
-        }
+    let verified = !triggerForVerify || didValueStick(triggerForVerify, wanted);
+    if (!verified && triggerForVerify) {
+      logWorkdayAttempt({
+        label: "", wanted, selector: elSummary(triggerForVerify),
+        optionsFound: scored.length, topCandidates: scored.slice(0, 5),
+        outcome: "retry", valueStuck: false
+      });
+      try {
+        triggerForVerify.scrollIntoView?.({ block: "center", inline: "nearest" });
+      } catch { /* ignore */ }
+      await sleep(200);
+      try { dispatchFullPointerClick(triggerForVerify); } catch { /* ignore */ }
+      await sleep(700);
+      let retryScored = collectWorkdayListScores(wanted, true);
+      if (!retryScored.length) retryScored = collectWorkdayListScores(wanted, false);
+      const retryPick =
+        retryScored.find((s) => s.score >= retryMin && s.node !== target) ||
+        retryScored.find((s) => s.score >= retryMin);
+      if (retryPick) {
+        clickWorkdayScoredEntry(retryPick);
+        await sleep(280);
+      } else {
+        clickWorkdayScoredEntry(best);
+        await sleep(280);
       }
+      verified = didValueStick(triggerForVerify, wanted);
+    }
+
+    if (!verified) {
+      addFillWarning({
+        trigger: triggerForVerify, wanted, reason: "workday-dropdown-value-not-stuck",
+        label: "", fieldType: "workday-dropdown",
+        bestText: best?.text, bestScore: best?.score,
+        topCandidates: scored.slice(0, 5)
+      });
     }
 
     logWorkdayAttempt({
@@ -860,12 +1193,29 @@
       label: "", wanted, fieldType: "workday-dropdown", triggerEl: target,
       scored, outcome: verified ? "picked" : "pick-unverified", reason: verified ? null : "value may not have stuck"
     });
-    return true;
+    return verified;
   }
 
   async function setWorkdayStyleChoiceControl(trigger, wantedRaw) {
     const wanted = String(wantedRaw || "").trim();
     if (!wanted) return null;
+
+    if (isWorkdayHostnameIncludesWorkday()) {
+      try {
+        trigger.scrollIntoView({ block: "center", inline: "nearest" });
+      } catch {
+        /* ignore */
+      }
+      await sleep(80);
+      try {
+        trigger.focus?.();
+      } catch {
+        /* ignore */
+      }
+      await selectWorkdayOption(trigger, wanted);
+      return null;
+    }
+
     trigger.scrollIntoView({ block: "center", inline: "nearest" });
     await sleep(150);
     try { trigger.focus?.(); } catch { /* ignore */ }
@@ -897,14 +1247,28 @@
       dispatchFieldEvents(input, wanted);
     } catch { /* ignore */ }
     await sleep(350);
-    const opened = await pickAndClickWorkdayListOption(wanted, input);
+    let opened = isWorkdayHostnameIncludesWorkday()
+      ? await selectWorkdayOption(input, wanted, { skipOpenClick: true })
+      : await pickAndClickWorkdayListOption(wanted, input);
     if (!opened) {
       try {
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
         input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
       } catch { /* ignore */ }
       await sleep(400);
-      await pickAndClickWorkdayListOption(wanted, input);
+      opened = isWorkdayHostnameIncludesWorkday()
+        ? await selectWorkdayOption(input, wanted, { skipOpenClick: true })
+        : await pickAndClickWorkdayListOption(wanted, input);
+    }
+    if (opened && !didValueStick(input, wanted)) {
+      addFillWarning({
+        trigger: input,
+        wanted,
+        reason: "workday-combobox-value-not-stuck",
+        label: input.getAttribute("aria-label") || "",
+        fieldType: "workday-combobox",
+        topCandidates: []
+      });
     }
     return null;
   }
@@ -1091,12 +1455,73 @@
       /* ignore */
     }
     dispatchChangeEvents(best.node);
+    await sleep(150);
+    let stuck = didValueStick(trigger, wanted);
+    if (!stuck) {
+      const retryMin = SAFE_MATCH_THRESHOLD - STICK_RETRY_THRESHOLD_DELTA;
+      const alt =
+        scored.find((s, i) => i > 0 && s.score >= retryMin && s.node !== best.node) ||
+        scored.find((s) => s.score >= retryMin && s.node !== best.node);
+      if (triggerRole !== "listbox") {
+        try { dispatchFullPointerClick(trigger); } catch { /* ignore */ }
+        await sleep(200);
+      }
+      if (alt) {
+        try {
+          alt.node.scrollIntoView({ block: "center", inline: "nearest" });
+        } catch {
+          /* ignore */
+        }
+        const altRadio = alt.node.querySelector?.('input[type="radio"]');
+        try {
+          if (altRadio) {
+            altRadio.focus?.();
+            dispatchFullPointerClick(altRadio);
+          } else {
+            dispatchFullPointerClick(alt.node);
+          }
+        } catch {
+          /* ignore */
+        }
+        dispatchChangeEvents(alt.node);
+      } else {
+        try {
+          best.node.scrollIntoView({ block: "center", inline: "nearest" });
+        } catch {
+          /* ignore */
+        }
+        const radio2 = best.node.querySelector?.('input[type="radio"]');
+        try {
+          if (radio2) {
+            radio2.focus?.();
+            dispatchFullPointerClick(radio2);
+          } else {
+            dispatchFullPointerClick(best.node);
+          }
+        } catch {
+          /* ignore */
+        }
+        dispatchChangeEvents(best.node);
+      }
+      await sleep(150);
+      stuck = didValueStick(trigger, wanted);
+    }
+    if (!stuck) {
+      addFillWarning({
+        trigger, wanted, reason: "generic-dropdown-value-not-stuck",
+        label: trigger.getAttribute("aria-label") || "", fieldType: fieldTypeLabel(trigger),
+        bestText: best?.text, bestScore: best?.score,
+        topCandidates: scored.slice(0, 5)
+      });
+      try { document.body.click(); } catch { /* ignore */ }
+      await sleep(80);
+      return null;
+    }
     logDropdownAttempt({
       label: trigger.getAttribute("aria-label") || "", wanted,
       fieldType: fieldTypeLabel(trigger), triggerEl: trigger,
       scored, outcome: "picked", reason: null
     });
-    await sleep(120);
     return null;
   }
 
@@ -1195,9 +1620,58 @@
     }
 
     dispatchFullPointerClick(best.node);
-    await sleep(200);
-
+    await sleep(220);
     dispatchFieldEvents(trigger, wanted);
+    let stuck = didValueStick(trigger, wanted);
+    if (!stuck) {
+      const retryMin = SAFE_MATCH_THRESHOLD - STICK_RETRY_THRESHOLD_DELTA;
+      const alt =
+        scored.find((s, i) => i > 0 && s.score >= retryMin) ||
+        (best.score >= retryMin ? best : null);
+      try { trigger.scrollIntoView({ block: "center", inline: "nearest" }); } catch { /* ignore */ }
+      await sleep(80);
+      try { trigger.focus?.(); } catch { /* ignore */ }
+      dispatchFullPointerClick(trigger);
+      await sleep(350);
+      if (tag === "input") {
+        try {
+          setNativeValue(trigger, "");
+          setNativeValue(trigger, wanted);
+          dispatchFieldEvents(trigger, wanted);
+        } catch { /* ignore */ }
+        await sleep(280);
+      }
+      let scored2 = collectGenericListboxScores(wanted);
+      if (!scored2.length) {
+        await sleep(300);
+        scored2 = collectGenericListboxScores(wanted);
+      }
+      const pick2 =
+        (alt && scored2.find((s) => s.node === alt.node)) ||
+        scored2.find((s) => s.score >= retryMin && s.node !== best.node) ||
+        scored2.find((s) => s.score >= retryMin) ||
+        scored2[0];
+      if (pick2) {
+        dispatchFullPointerClick(pick2.node);
+        await sleep(220);
+        dispatchFieldEvents(trigger, wanted);
+      }
+      stuck = didValueStick(trigger, wanted);
+    }
+    if (!stuck) {
+      addFillWarning({
+        trigger, wanted, reason: "openAndPick-value-not-stuck",
+        label: trigger.getAttribute("aria-label") || "", fieldType: fieldTypeLabel(trigger),
+        bestText: best?.text, bestScore: best?.score,
+        topCandidates: scored.slice(0, 5)
+      });
+      try { document.body.click(); } catch { /* ignore */ }
+      try {
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      } catch { /* ignore */ }
+      await sleep(100);
+      return null;
+    }
     logDropdownAttempt({
       label: trigger.getAttribute("aria-label") || "", wanted,
       fieldType: fieldTypeLabel(trigger), triggerEl: trigger,
@@ -1331,6 +1805,19 @@
         const result = await siteHandlers.siteSpecificDropdownFill(el, String(value || "").trim(), scoreChoiceMatch);
         if (result.warning) addFillWarning(result.warning);
         if (result.filled) {
+          await sleep(120);
+          const w = String(value || "").trim();
+          if (w && !didValueStick(el, w)) {
+            addFillWarning({
+              trigger: el,
+              wanted: w,
+              reason: "site-handler-value-not-stuck",
+              label: el.getAttribute("aria-label") || "",
+              fieldType: fieldTypeLabel(el),
+              topCandidates: []
+            });
+            return null;
+          }
           dispatchFieldEvents(el, value);
           return result.prior;
         }
@@ -1350,7 +1837,7 @@
       return openAndPickDropdownOption(el, value);
     }
     // 6. Standard native controls (input, select, textarea, contenteditable)
-    return setFieldValue(el, value);
+    return await setFieldValue(el, value);
   }
 
   function labelTextForInput(input) {
@@ -1475,7 +1962,7 @@
     return null;
   }
 
-  function setFieldValue(el, value) {
+  async function setFieldValue(el, value) {
     const tag = el.tagName.toLowerCase();
     const type = (el.type || "").toLowerCase();
     let oldValue;
@@ -1521,7 +2008,8 @@
     }
 
     if (tag === "select") {
-      const opt = pickBestSelectOption(el, value);
+      const w = String(value || "").trim();
+      let opt = pickBestSelectOption(el, value, SAFE_MATCH_THRESHOLD);
       if (opt) {
         opt.selected = true;
         setNativeValue(el, opt.value);
@@ -1529,6 +2017,35 @@
         setNativeValue(el, value);
       }
       dispatchFieldEvents(el, opt ? opt.value : value);
+      await sleep(80);
+      if (w && !didValueStick(el, w)) {
+        const retryMin = SAFE_MATCH_THRESHOLD - STICK_RETRY_THRESHOLD_DELTA;
+        const opt2 = pickBestSelectOption(el, value, retryMin);
+        if (opt2 && opt2 !== opt) {
+          opt2.selected = true;
+          setNativeValue(el, opt2.value);
+          dispatchFieldEvents(el, opt2.value);
+        } else if (opt) {
+          opt.selected = true;
+          setNativeValue(el, opt.value);
+          dispatchFieldEvents(el, opt.value);
+        } else {
+          setNativeValue(el, value);
+          dispatchFieldEvents(el, value);
+        }
+        await sleep(80);
+        if (!didValueStick(el, w)) {
+          addFillWarning({
+            trigger: el,
+            wanted: w,
+            reason: "native-select-value-not-stuck",
+            label: el.getAttribute("aria-label") || el.name || "",
+            fieldType: "native-select",
+            topCandidates: []
+          });
+          return null;
+        }
+      }
       return oldValue;
     }
 
@@ -1606,7 +2123,19 @@
     setStorageLocal({ fillHistory: next });
   }
 
-  function highlightField(el) {
+  /**
+   * Success highlight: persistent debug outline when visual debug is on; brief green flash otherwise.
+   * @param {{ key?: string, confidence?: number }} [meta]
+   */
+  function highlightField(el, meta) {
+    if (!el) return;
+    if (visualDebugEnabled()) {
+      applyDebugVisualMark(el, "ok", {
+        profileKey: meta?.key,
+        confidence: meta?.confidence
+      });
+      return;
+    }
     const oldOutline = el.style.outline;
     const oldBoxShadow = el.style.boxShadow;
     el.style.outline = "2px solid #34c759";
@@ -1712,70 +2241,12 @@
 
   const MAX_RESCAN_PASSES = 4;
   const WORKDAY_RESCAN_DELAY_MS = 900;
-  const PROGRESSIVE_RESCAN_PASSES = 3;
-  const PROGRESSIVE_RESCAN_DELAY_MS = 850;
-
-  async function progressiveRescanFill(profile, preview, threshold, filledElements) {
-    if (!isJobApplicationHost()) return { filled: 0, keys: [] };
-    let totalFilled = 0;
-    const matchedKeys = [];
-    for (let pass = 0; pass < PROGRESSIVE_RESCAN_PASSES; pass += 1) {
-      await sleep(pass === 0 ? 400 : PROGRESSIVE_RESCAN_DELAY_MS);
-      const batch = window.JobAutofillDetector.detectAndMatch(profile, {
-        threshold,
-        excludeElements: filledElements
-      });
-      if (!batch.length) break;
-      if (isDebug()) {
-        console.log(`[AutoFill] Progressive rescan — pass ${pass + 1}: ${batch.length} newly visible field(s)`);
-      }
-      let filledThisPass = 0;
-      for (const m of batch) {
-        const mergedText = `${m.meta.name} ${m.meta.id} ${m.meta.placeholder} ${m.meta.label} ${m.meta.nearText}`;
-        if (SENSITIVE_PATTERNS.test(mergedText)) continue;
-        try {
-          const value = resolveMatchValue(m);
-          logFillMatchDebug({
-            label: m.meta.label || m.meta.ariaLabel || "",
-            fieldType: fieldTypeLabel(m.element),
-            profileKey: m.key,
-            value,
-            confidence: m.confidence,
-            selectorSummary: elSummary(m.element),
-            outcome: "attempt",
-            reason: `progressive rescan pass ${pass + 1}`
-          });
-          const raw = await applyFieldValue(m.element, value, m.key);
-          if (isAriaCustomRadio(m.element) && raw == null) continue;
-          let previous;
-          let filledElement = m.element;
-          if (raw && typeof raw === "object" && raw.__ariaRadio) {
-            previous = raw.previous;
-            filledElement = raw.target || m.element;
-          } else {
-            previous = raw;
-          }
-          const synthetic = usesSyntheticFill(m.element, m.key);
-          STATE.lastFilled.push({
-            element: filledElement,
-            previous,
-            synthetic,
-            ariaRadio: Boolean(raw && raw.__ariaRadio)
-          });
-          filledElements.add(m.element);
-          filledElements.add(filledElement);
-          highlightField(filledElement);
-          totalFilled += 1;
-          filledThisPass += 1;
-          matchedKeys.push(m.key);
-        } catch (err) {
-          if (isDebug()) console.error("[AutoFill] Progressive rescan error:", err);
-        }
-      }
-      if (filledThisPass === 0) break;
-    }
-    return { filled: totalFilled, keys: matchedKeys };
-  }
+  /** Generic detector passes: initial snapshot + redetections for fields revealed after earlier answers. */
+  const MAX_AUTOFILL_PASSES = 4;
+  const AUTOFILL_INTERPASS_DELAY_MS = 500;
+  /** Workday: wait after each fill so conditional fields can render; extra rescan waves for new matches. */
+  const WORKDAY_AFTER_FIELD_MS = 300;
+  const WORKDAY_DYNAMIC_RESCAN_ROUNDS = 3;
 
   function collectWorkdayFormFields() {
     const fields = [];
@@ -1923,12 +2394,19 @@
           totalFilled++;
           filledThisPass++;
           filledKeys.push(key);
-          highlightField(element);
+          highlightField(element, { key, confidence: 1 });
 
           // Wait for dependent questions to potentially appear
           await sleep(WORKDAY_RESCAN_DELAY_MS);
 
         } catch (err) {
+          if (visualDebugEnabled()) {
+            applyDebugVisualMark(element, "fail", {
+              profileKey: key,
+              confidence: 1,
+              note: String(err?.message || err || "error")
+            });
+          }
           if (isDebug()) console.error(`[Workday] Fill error for "${label}":`, err);
         }
       }
@@ -1942,6 +2420,353 @@
     }
 
     return { filled: totalFilled, fieldKeys: filledKeys };
+  }
+
+  /**
+   * Core multi-pass detector fill (optionally re-run on a fresh step with pass0Batch omitted).
+   * @param {object} opts
+   * @param {Array|null|undefined} opts.pass0Batch — first pass batch; omit/null to run a fresh detectAndMatch
+   * @param {boolean} opts.applyPreviewIndexOverrides — preview dialog index overrides (first wave only)
+   * @param {WeakSet} opts.filledElements
+   * @param {string} [opts.logTag] — debug label for non-primary waves
+   * @param {number} [opts.workdayAfterFieldMs] — when positive, sleep after each successful fill (Workday dynamic fields)
+   * @param {number} [opts.afterSuccessfulFillMs] — sleep after each successful fill when Workday delay is 0 (e.g. LinkedIn modal)
+   * @param {Element} [opts.detectRoot] — limit re-detection passes to this subtree (LinkedIn Easy Apply step)
+   */
+  async function runGenericMultiPassFill(enrichedProfile, preview, threshold, opts) {
+    const {
+      pass0Batch,
+      applyPreviewIndexOverrides,
+      filledElements,
+      logTag = "",
+      workdayAfterFieldMs = 0,
+      afterSuccessfulFillMs = 0,
+      detectRoot = null
+    } = opts;
+    let filledCount = 0;
+    let skippedCount = 0;
+    const matchedKeys = [];
+
+    for (let pass = 0; pass < MAX_AUTOFILL_PASSES; pass += 1) {
+      if (pass > 0) {
+        if (!isJobApplicationHost()) break;
+        await sleep(AUTOFILL_INTERPASS_DELAY_MS);
+      }
+
+      const detectOpts = {
+        threshold,
+        excludeElements: filledElements,
+        ...(detectRoot && detectRoot.nodeType === 1 ? { root: detectRoot } : {})
+      };
+      const batch =
+        pass === 0
+          ? pass0Batch != null
+            ? pass0Batch
+            : window.JobAutofillDetector.detectAndMatch(enrichedProfile, detectOpts)
+          : window.JobAutofillDetector.detectAndMatch(enrichedProfile, detectOpts);
+
+      if (!batch.length) {
+        if (isDebug() && pass > 0) {
+          console.log(`[AutoFill] Pass ${pass + 1}: no new unmatched fields — stopping`);
+        }
+        break;
+      }
+
+      if (isDebug() && pass > 0) {
+        console.log(`[AutoFill] Pass ${pass + 1}: ${batch.length} field(s) re-detected (excluding already-filled controls)`);
+      }
+
+      let filledThisPass = 0;
+
+      for (let index = 0; index < batch.length; index += 1) {
+        const m = batch[index];
+        if (filledElements.has(m.element)) continue;
+        const mergedText = `${m.meta.name} ${m.meta.id} ${m.meta.placeholder} ${m.meta.label} ${m.meta.nearText}`;
+        if (SENSITIVE_PATTERNS.test(mergedText)) continue;
+
+        const fieldLabel = m.meta.label || m.meta.ariaLabel || "";
+        if (!matchConfidenceEligible(m)) {
+          const conf = Number(m.confidence);
+          addFillWarning({
+            trigger: m.element,
+            wanted: "",
+            reason: "match-confidence-below-threshold",
+            label: fieldLabel,
+            fieldType: fieldTypeLabel(m.element),
+            profileKey: m.key,
+            confidence: conf,
+            topCandidates: []
+          });
+          if (isDebug()) {
+            console.warn(
+              `[AutoFill] Skipped (match confidence below ${SAFE_MATCH_THRESHOLD}): label="${fieldLabel}" key="${m.key}" confidence=${Number.isNaN(conf) ? "—" : conf.toFixed(3)}`
+            );
+            logFillMatchDebug({
+              label: fieldLabel,
+              fieldType: fieldTypeLabel(m.element),
+              profileKey: m.key,
+              value: resolveMatchValue(m),
+              confidence: m.confidence,
+              selectorSummary: elSummary(m.element),
+              outcome: "skipped-low-confidence",
+              reason: `requires confidence ≥ ${SAFE_MATCH_THRESHOLD}`
+            });
+          }
+          continue;
+        }
+
+        try {
+          const value =
+            applyPreviewIndexOverrides && pass === 0
+              ? preview.overrides?.[String(index)] ?? resolveMatchValue(m)
+              : resolveMatchValue(m);
+          const reason =
+            pass === 0 && applyPreviewIndexOverrides
+              ? "primary fill pass"
+              : logTag
+                ? `${logTag} — pass ${pass + 1}`
+                : `generic fill pass ${pass + 1} (dynamic)`;
+          logFillMatchDebug({
+            label: m.meta.label || m.meta.ariaLabel || "",
+            fieldType: fieldTypeLabel(m.element),
+            profileKey: m.key,
+            value,
+            confidence: m.confidence,
+            selectorSummary: elSummary(m.element),
+            outcome: "attempt",
+            reason
+          });
+          if (isDebug()) {
+            console.log(
+              `[AutoFill] pass ${pass + 1} #${index} key="${m.key}" value="${String(value).slice(0, 60)}"`,
+              `type=${fieldTypeLabel(m.element)}`,
+              elSummary(m.element)
+            );
+          }
+          const raw = await applyFieldValue(m.element, value, m.key);
+          if (isAriaCustomRadio(m.element) && raw == null) {
+            skippedCount += 1;
+            if (visualDebugEnabled()) {
+              applyDebugVisualMark(m.element, "warn", {
+                profileKey: m.key,
+                confidence: m.confidence,
+                note: "aria radio — no confident match"
+              });
+            }
+            continue;
+          }
+          if (raw == null && !usesSyntheticFill(m.element, m.key)) {
+            if (visualDebugEnabled()) {
+              applyDebugVisualMark(m.element, "fail", {
+                profileKey: m.key,
+                confidence: m.confidence,
+                note: "fill returned null"
+              });
+            }
+            continue;
+          }
+          let previous;
+          let filledElement = m.element;
+          if (raw && typeof raw === "object" && raw.__ariaRadio) {
+            previous = raw.previous;
+            filledElement = raw.target || m.element;
+          } else {
+            previous = raw;
+          }
+          const synthetic = usesSyntheticFill(m.element, m.key);
+          STATE.lastFilled.push({
+            element: filledElement,
+            previous,
+            synthetic,
+            ariaRadio: Boolean(raw && raw.__ariaRadio)
+          });
+          filledElements.add(m.element);
+          filledElements.add(filledElement);
+          highlightField(filledElement, { key: m.key, confidence: m.confidence });
+          filledCount += 1;
+          filledThisPass += 1;
+          matchedKeys.push(m.key);
+          if (workdayAfterFieldMs > 0) {
+            await sleep(workdayAfterFieldMs);
+          } else if (afterSuccessfulFillMs > 0) {
+            await sleep(afterSuccessfulFillMs);
+          }
+        } catch (_err) {
+          if (visualDebugEnabled()) {
+            applyDebugVisualMark(m.element, "fail", {
+              profileKey: m.key,
+              confidence: m.confidence,
+              note: String(_err?.message || _err || "error")
+            });
+          }
+          if (isDebug()) console.error(`[AutoFill] pass ${pass + 1} #${index} error:`, _err);
+        }
+      }
+
+      if (filledThisPass === 0) {
+        if (isDebug()) {
+          console.log(`[AutoFill] Pass ${pass + 1}: nothing filled — stopping multi-pass`);
+        }
+        break;
+      }
+    }
+
+    return { filledCount, skippedCount, matchedKeys };
+  }
+
+  function getWorkdayValidationRoot() {
+    return (
+      document.querySelector("[data-automation-id='applicationFlow']") ||
+      document.querySelector("[data-automation-id='applicationFlowContainer']") ||
+      document.querySelector("[data-automation-id='careersSiteContainer']") ||
+      document.body
+    );
+  }
+
+  function logRequiredProgressBlocked(contextLabel, status) {
+    if (!status || status.ok) return;
+    console.warn(`[AutoFill] ${contextLabel}: stopping progression — required field(s) incomplete`, status.problems);
+  }
+
+  function highlightRequiredProgressProblems(status, contextLabel) {
+    if (!status || status.ok || !visualDebugEnabled()) return;
+    for (const p of status.problems || []) {
+      const el = p.element;
+      if (!el || el.nodeType !== 1) continue;
+      const note =
+        p.reason === "required-file-manual"
+          ? "Required file upload (fill manually)"
+          : p.reason === "required-empty-label"
+            ? "Label marked required — field still empty"
+            : "Required field still empty";
+      applyDebugVisualMark(el, "fail", { profileKey: "", note: `${contextLabel}: ${note}` });
+    }
+  }
+
+  /**
+   * After wave 1 fills the first Easy Apply step, advance with Next (never Submit/Review/Dismiss),
+   * wait for the next step, then run scoped multi-pass fill on the new step only.
+   */
+  async function runLinkedInEasyApplyMultiStepFlow({ enrichedProfile, preview, threshold, filledElements }) {
+    const LI = window.JobAutofillLinkedInEA;
+    const easy = window.JobAutofillSiteHandlers?.linkedinEasyApply;
+    if (!LI || !easy?.isActive?.()) {
+      return { addedFilled: 0, addedSkipped: 0, addedKeys: [], stopReason: "inactive" };
+    }
+
+    let addedFilled = 0;
+    let addedSkipped = 0;
+    const addedKeys = [];
+    let stopReason = "";
+
+    for (let nav = 0; nav < LI.MAX_NAVIGATION_STEPS; nav++) {
+      await sleep(LI.POST_WAVE_SETTLE_MS);
+      const modalRoot = easy.getModalRoot?.() || LI.getModalRoot();
+      if (!modalRoot) {
+        stopReason = "modal_closed";
+        LI.debugLog("stop", { stopReason, nav });
+        break;
+      }
+
+      const stepRoot = LI.getActiveStepContainer(modalRoot) || modalRoot;
+      const title = LI.getStepTitle(stepRoot);
+      LI.debugLog("step", {
+        nav,
+        title,
+        fingerprint: LI.stepFingerprint(modalRoot, stepRoot)
+      });
+
+      if (!LI.AUTO_SUBMIT_LINKEDIN && easy.findSubmitButton?.()) {
+        stopReason = "submit_visible";
+        LI.debugLog("stop", { stopReason, title });
+        break;
+      }
+
+      const reviewBtn = LI.findReviewApplicationButton(modalRoot);
+      const safeNext = LI.findSafeNextButton(modalRoot);
+      if (reviewBtn && !safeNext) {
+        stopReason = "review_button_visible";
+        LI.debugLog("stop", { stopReason, title });
+        break;
+      }
+
+      const req = LI.getRequiredFieldStatus(stepRoot);
+      if (!req.ok) {
+        stopReason = "required_fields_incomplete";
+        logRequiredProgressBlocked("LinkedIn Easy Apply (before Next)", req);
+        highlightRequiredProgressProblems(req, "LinkedIn EA · before Next");
+        LI.debugLog("stop", { stopReason, title, problems: req.problems });
+        break;
+      }
+
+      if (!safeNext) {
+        stopReason = easy.findSubmitButton?.() ? "submit_visible" : "no_next_button";
+        LI.debugLog("stop", { stopReason, title });
+        break;
+      }
+
+      const fpBefore = LI.stepFingerprint(modalRoot, stepRoot);
+      LI.debugLog("click-next", { label: LI.cleanText(safeNext).slice(0, 100) });
+      try {
+        safeNext.scrollIntoView({ block: "center", inline: "nearest" });
+      } catch {
+        /* ignore */
+      }
+      dispatchFullPointerClick(safeNext);
+      await sleep(LI.STEP_SETTLE_MS);
+
+      await LI.waitForStepChange(
+        () => {
+          const m = easy.getModalRoot?.() || LI.getModalRoot();
+          const s = LI.getActiveStepContainer(m) || m;
+          return m ? LI.stepFingerprint(m, s) : "";
+        },
+        fpBefore,
+        LI.FINGERPRINT_POLL_MS
+      );
+
+      const modalAfter = easy.getModalRoot?.() || LI.getModalRoot();
+      if (!modalAfter) {
+        stopReason = "modal_closed";
+        LI.debugLog("stop", { stopReason, nav: nav + 1 });
+        break;
+      }
+      const stepAfter = LI.getActiveStepContainer(modalAfter) || modalAfter;
+
+      const batch = window.JobAutofillDetector.detectAndMatch(enrichedProfile, {
+        threshold,
+        root: stepAfter,
+        excludeElements: filledElements
+      });
+      LI.debugLog("post-nav-detect", {
+        count: batch.length,
+        keys: batch.map((m) => `${m.key}:${Number(m.confidence).toFixed(2)}`)
+      });
+
+      const wave = await runGenericMultiPassFill(enrichedProfile, preview, threshold, {
+        pass0Batch: batch,
+        applyPreviewIndexOverrides: false,
+        filledElements,
+        logTag: "LinkedIn Easy Apply",
+        detectRoot: stepAfter,
+        afterSuccessfulFillMs: LI.AFTER_FIELD_MS
+      });
+      addedFilled += wave.filledCount;
+      addedSkipped += wave.skippedCount;
+      addedKeys.push(...wave.matchedKeys);
+
+      const postReq = LI.getRequiredFieldStatus(stepAfter);
+      if (!postReq.ok) {
+        stopReason = "required_fields_incomplete_after_fill";
+        logRequiredProgressBlocked("LinkedIn Easy Apply (after step fill)", postReq);
+        highlightRequiredProgressProblems(postReq, "LinkedIn EA · after fill");
+        LI.debugLog("stop", { stopReason, problems: postReq.problems });
+        break;
+      }
+    }
+
+    if (!stopReason) stopReason = "max_navigation_steps";
+    return { addedFilled, addedSkipped, addedKeys, stopReason };
   }
 
   async function fillForm({ dryRun = false, matchThreshold } = {}) {
@@ -1959,7 +2784,21 @@
     }
     const threshold = Number(matchThreshold ?? STATE.settings?.matchThreshold ?? 0.38);
     const enrichedProfile = buildProfileForMatch();
-    const matches = window.JobAutofillDetector.detectAndMatch(enrichedProfile, { threshold });
+    const isLinkedInEa =
+      Boolean(window.JobAutofillSiteHandlers?.isLinkedInEasyApply?.()) &&
+      Boolean(window.JobAutofillSiteHandlers?.linkedinEasyApply?.isActive?.());
+    let linkedInDetectRoot = null;
+    if (isLinkedInEa && window.JobAutofillLinkedInEA) {
+      const modal = window.JobAutofillSiteHandlers.linkedinEasyApply.getModalRoot?.();
+      linkedInDetectRoot =
+        window.JobAutofillLinkedInEA.getActiveStepContainer?.(modal) || modal || null;
+    }
+    const matches = window.JobAutofillDetector.detectAndMatch(enrichedProfile, {
+      threshold,
+      ...(linkedInDetectRoot && (linkedInDetectRoot.nodeType === 1 || linkedInDetectRoot.nodeType === 9)
+        ? { root: linkedInDetectRoot }
+        : {})
+    });
     if (!matches.length) {
       if (IS_TOP_WINDOW) {
         notify(
@@ -1978,9 +2817,10 @@
 
     // Clear stale warnings from any previous fill pass.
     drainFillWarnings();
+    clearDebugVisualMarks();
 
     if (isDebug()) {
-      console.group(`[AutoFill] Fill pass — ${matches.length} matched field(s)`);
+      console.group(`[AutoFill] Multi-pass fill — up to ${MAX_AUTOFILL_PASSES} pass(es), ${matches.length} field(s) in initial snapshot`);
     }
 
     STATE.lastFilled = [];
@@ -1988,6 +2828,8 @@
     let skippedCount = 0;
     const matchedKeys = [];
     const filledElements = new WeakSet();
+    let workdayBlocked = false;
+    let linkedInBlocked = false;
 
     // Run Workday-specific fill pass first for better coverage of Workday
     // custom controls and dependent questions that appear after filling.
@@ -1998,69 +2840,114 @@
       matchedKeys.push(...wdResult.fieldKeys);
     }
 
-    for (let index = 0; index < matches.length; index += 1) {
-      const m = matches[index];
-      if (filledElements.has(m.element)) continue;
-      const mergedText = `${m.meta.name} ${m.meta.id} ${m.meta.placeholder} ${m.meta.label} ${m.meta.nearText}`;
-      if (SENSITIVE_PATTERNS.test(mergedText)) continue;
-      try {
-        const value = preview.overrides?.[String(index)] ?? resolveMatchValue(m);
-        logFillMatchDebug({
-          label: m.meta.label || m.meta.ariaLabel || "",
-          fieldType: fieldTypeLabel(m.element),
-          profileKey: m.key,
-          value,
-          confidence: m.confidence,
-          selectorSummary: elSummary(m.element),
-          outcome: "attempt",
-          reason: "primary fill pass"
+    const liAfterMs = window.JobAutofillLinkedInEA?.AFTER_FIELD_MS || 120;
+    const wave1 = await runGenericMultiPassFill(enrichedProfile, preview, threshold, {
+      pass0Batch: matches,
+      applyPreviewIndexOverrides: true,
+      filledElements,
+      logTag: "",
+      workdayAfterFieldMs: isWorkday ? WORKDAY_AFTER_FIELD_MS : 0,
+      afterSuccessfulFillMs: isLinkedInEa && !isWorkday ? liAfterMs : 0,
+      detectRoot:
+        linkedInDetectRoot && linkedInDetectRoot.nodeType === 1 ? linkedInDetectRoot : null
+    });
+    filledCount += wave1.filledCount;
+    skippedCount += wave1.skippedCount;
+    matchedKeys.push(...wave1.matchedKeys);
+
+    if (
+      isLinkedInEa &&
+      linkedInDetectRoot &&
+      (linkedInDetectRoot.nodeType === 1 || linkedInDetectRoot.nodeType === 9)
+    ) {
+      const rs = window.JobAutofillRequiredFields?.getStatus?.(linkedInDetectRoot);
+      if (rs && !rs.ok) {
+        linkedInBlocked = true;
+        logRequiredProgressBlocked("LinkedIn Easy Apply (after wave 1)", rs);
+        highlightRequiredProgressProblems(rs, "LinkedIn EA · wave 1");
+      }
+    }
+
+    if (isWorkday) {
+      const wr = window.JobAutofillRequiredFields?.getStatus?.(getWorkdayValidationRoot());
+      if (wr && !wr.ok) {
+        workdayBlocked = true;
+        logRequiredProgressBlocked("Workday (after wave 1)", wr);
+        highlightRequiredProgressProblems(wr, "Workday · after wave 1");
+      }
+    }
+
+    if (isWorkday && !workdayBlocked) {
+      for (let r = 0; r < WORKDAY_DYNAMIC_RESCAN_ROUNDS; r += 1) {
+        await sleep(WORKDAY_AFTER_FIELD_MS);
+        const rescanBatch = window.JobAutofillDetector.detectAndMatch(enrichedProfile, {
+          threshold,
+          excludeElements: filledElements
         });
+        if (!rescanBatch.length) {
+          if (isDebug()) {
+            console.log(
+              `[AutoFill] Workday dynamic rescan: no new fields (stop after round ${r + 1}/${WORKDAY_DYNAMIC_RESCAN_ROUNDS})`
+            );
+          }
+          break;
+        }
         if (isDebug()) {
           console.log(
-            `[AutoFill] #${index} key="${m.key}" value="${String(value).slice(0, 60)}"`,
-            `type=${fieldTypeLabel(m.element)}`,
-            elSummary(m.element)
+            `[AutoFill] Workday dynamic autofill round ${r + 1}/${WORKDAY_DYNAMIC_RESCAN_ROUNDS}: ${rescanBatch.length} field(s)`
           );
         }
-        const raw = await applyFieldValue(m.element, value, m.key);
-        if (isAriaCustomRadio(m.element) && raw == null) { skippedCount += 1; continue; }
-        let previous;
-        let filledElement = m.element;
-        if (raw && typeof raw === "object" && raw.__ariaRadio) {
-          previous = raw.previous;
-          filledElement = raw.target || m.element;
-        } else {
-          previous = raw;
-        }
-        const synthetic = usesSyntheticFill(m.element, m.key);
-        STATE.lastFilled.push({
-          element: filledElement,
-          previous,
-          synthetic,
-          ariaRadio: Boolean(raw && raw.__ariaRadio)
+        const wdDyn = await runGenericMultiPassFill(enrichedProfile, preview, threshold, {
+          pass0Batch: rescanBatch,
+          applyPreviewIndexOverrides: false,
+          filledElements,
+          logTag: "Workday dynamic",
+          workdayAfterFieldMs: WORKDAY_AFTER_FIELD_MS
         });
-        filledElements.add(m.element);
-        filledElements.add(filledElement);
-        highlightField(filledElement);
-        filledCount += 1;
-        matchedKeys.push(m.key);
-      } catch (_err) {
-        if (isDebug()) console.error(`[AutoFill] #${index} error:`, _err);
+        filledCount += wdDyn.filledCount;
+        skippedCount += wdDyn.skippedCount;
+        matchedKeys.push(...wdDyn.matchedKeys);
+
+        const wr2 = window.JobAutofillRequiredFields?.getStatus?.(getWorkdayValidationRoot());
+        if (wr2 && !wr2.ok) {
+          workdayBlocked = true;
+          logRequiredProgressBlocked(`Workday (after dynamic round ${r + 1})`, wr2);
+          highlightRequiredProgressProblems(wr2, `Workday · after dynamic ${r + 1}`);
+          break;
+        }
+      }
+    }
+
+    if (isLinkedInEa && !linkedInBlocked && window.JobAutofillLinkedInEA?.isEasyApplyContext?.()) {
+      const liFlow = await runLinkedInEasyApplyMultiStepFlow({
+        enrichedProfile,
+        preview,
+        threshold,
+        filledElements
+      });
+      filledCount += liFlow.addedFilled;
+      skippedCount += liFlow.addedSkipped;
+      matchedKeys.push(...liFlow.addedKeys);
+      if (window.JobAutofillLinkedInEA.isVerbose()) {
+        window.JobAutofillLinkedInEA.debugLog("flow-complete", {
+          stopReason: liFlow.stopReason,
+          addedFilled: liFlow.addedFilled,
+          addedSkipped: liFlow.addedSkipped
+        });
+      } else if (isDebug()) {
+        console.log("[AutoFill] LinkedIn Easy Apply flow stopped:", liFlow.stopReason);
       }
     }
 
     // Workday: final pass for dependent questions after generic fill.
-    if (isWorkday) {
+    if (isWorkday && !workdayBlocked) {
       await sleep(WORKDAY_RESCAN_DELAY_MS);
       const postResult = await workdayFillPass(enrichedProfile, preview, filledElements);
       filledCount += postResult.filled;
       matchedKeys.push(...postResult.fieldKeys);
+    } else if (isWorkday && workdayBlocked && isDebug()) {
+      console.log("[AutoFill] Workday: skipping final fill pass — required fields blocked progression");
     }
-
-    // Greenhouse / Indeed / LinkedIn / Workday / etc.: newly revealed fields
-    const progressive = await progressiveRescanFill(enrichedProfile, preview, threshold, filledElements);
-    filledCount += progressive.filled;
-    matchedKeys.push(...progressive.keys);
 
     // Report structured warnings for any dropdowns/radios that were skipped.
     const warnings = drainFillWarnings();
@@ -2068,11 +2955,16 @@
       console.groupCollapsed(`[AutoFill] ${warnings.length} dropdown(s) skipped — summary`);
       console.table(warnings.map((w) => ({
         reason: w.reason,
+        label: w.label ?? "—",
+        profileKey: w.profileKey ?? "—",
+        confidence:
+          w.confidence != null && !Number.isNaN(Number(w.confidence))
+            ? Number(w.confidence).toFixed(3)
+            : "—",
         wanted: w.wanted,
         bestMatch: w.bestText ?? "—",
-        score: w.bestScore?.toFixed(3) ?? "—",
-        fieldType: w.fieldType ?? "—",
-        label: w.label ?? "—"
+        score: w.bestScore != null && !Number.isNaN(Number(w.bestScore)) ? Number(w.bestScore).toFixed(3) : "—",
+        fieldType: w.fieldType ?? "—"
       })));
       console.groupEnd();
     }
@@ -2089,7 +2981,10 @@
 
     let msg = `Filled ${filledCount} fields successfully.`;
     if (skippedCount > 0) msg += ` ${skippedCount} dropdown(s) skipped (no confident match).`;
-    notify(msg, skippedCount > 0 ? "warning" : "success");
+    if (linkedInBlocked || workdayBlocked) {
+      msg += " Progression stopped: required field(s) still empty (see console).";
+    }
+    notify(msg, skippedCount > 0 || linkedInBlocked || workdayBlocked ? "warning" : "success");
   }
 
   function undoFill() {
@@ -2327,11 +3222,15 @@
   window.enableAutofillDebug = () => {
     window.__autofillDebug = true;
     try { window.__jobAutofillDevMode = true; } catch { /* ignore */ }
-    console.log("[AutoFill] Debug mode ON — run Fill again to see diagnostics.");
+    console.log(
+      "[AutoFill] Debug mode ON — run Fill again for console logs and page overlays (green/yellow/red). Set window.__autofillVisualDebug = false to hide overlays only."
+    );
   };
   window.disableAutofillDebug = () => {
     window.__autofillDebug = false;
     try { window.__jobAutofillDevMode = false; } catch { /* ignore */ }
+    clearDebugVisualMarks();
     console.log("[AutoFill] Debug mode OFF.");
   };
+  window.clearAutofillDebugOverlay = clearDebugVisualMarks;
 })();

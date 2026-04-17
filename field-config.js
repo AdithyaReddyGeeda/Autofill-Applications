@@ -28,7 +28,9 @@
           'input[name*="last"]',
           'input[name*="email"]',
           'input[type="url"]',
-          'input[data-test-single-line-text-field]'
+          'input[data-test-single-line-text-field]',
+          'input[role="combobox"]',
+          ".jobs-easy-apply-form-element input[type=\"text\"]"
         ],
         textarea: ["textarea"],
         select: ["select"],

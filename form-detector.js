@@ -250,10 +250,19 @@
       options.excludeElements instanceof Set || options.excludeElements instanceof WeakSet
         ? options.excludeElements
         : null;
-    const fields = queryCandidateFields().filter((el) => !exclude || !exclude.has(el));
+    const searchRoot =
+      options.root && (options.root.nodeType === 1 || options.root.nodeType === 9)
+        ? options.root
+        : document;
+    const fields = queryCandidateFields(searchRoot).filter((el) => !exclude || !exclude.has(el));
     const matches = fields
       .map((el) => {
         const meta = extractMetadata(el);
+        const intent = window.JobAutofillMatcher.matchIntentFromMetadata(meta, profile);
+        const minIntent = Number(window.JobAutofillMatcher.INTENT_LAYER_MIN_CONFIDENCE ?? 0.92);
+        if (intent && intent.confidence >= minIntent) {
+          return { element: el, meta, ...intent };
+        }
         const semantic = window.JobAutofillMatcher.maybeSemanticValue(meta, profile);
         const direct = window.JobAutofillMatcher.scoreField(meta, profile, threshold);
         const useSemantic = !isChoiceLikeControl(el) && semantic && semantic.value;

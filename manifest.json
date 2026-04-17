@@ -27,7 +27,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["site-handlers.js", "field-config.js", "data-matcher.js", "form-detector.js", "content-script.js"],
+      "js": ["site-handlers.js", "required-fields.js", "linkedin-easy-apply.js", "field-config.js", "data-matcher.js", "form-detector.js", "content-script.js"],
       "run_at": "document_idle",
       "all_frames": true
     }
