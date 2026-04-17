@@ -23,7 +23,13 @@
     linkedin: {
       hostPatterns: [/linkedin\.com/i],
       selectors: {
-        text: ['input[name*="first"]', 'input[name*="last"]', 'input[name*="email"]'],
+        text: [
+          'input[name*="first"]',
+          'input[name*="last"]',
+          'input[name*="email"]',
+          'input[type="url"]',
+          'input[data-test-single-line-text-field]'
+        ],
         textarea: ["textarea"],
         select: ["select"],
         checkbox: ['input[type="checkbox"]'],
@@ -124,6 +130,7 @@
       'input[type="text"]',
       'input[type="email"]',
       'input[type="tel"]',
+      'input[type="url"]',
       'input[type="date"]',
       'input[type="month"]',
       'input:not([type])'

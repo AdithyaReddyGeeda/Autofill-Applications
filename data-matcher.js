@@ -15,10 +15,10 @@
     phone_country_code: ["country phone code", "phone code", "dialing code", "calling code", "international code"],
     phone_device_type: ["phone device type", "device type", "phone type", "preferred phone"],
     phone_extension: ["phone extension", "extension", "ext."],
-    linkedin: ["linkedin", "linked in"],
+    linkedin: ["linkedin", "linked in", "linkedin profile", "linkedin url", "linkedin.com"],
     github: ["github"],
     portfolio: ["portfolio", "website", "personal site"],
-    location: ["location", "based in", "where are you based", "residing in"],
+    location: ["location", "based in", "where are you based", "residing in", "current location", "where do you live", "city and state"],
     address_line1: ["address line 1", "address line one", "street address", "street line", "mailing address"],
     address_line2: ["address line 2", "address line two", "suite", "apt", "apartment", "unit"],
     city: ["city", "town", "municipality"],
@@ -31,18 +31,32 @@
     date_of_birth: ["date of birth", "dob", "birth date", "birthday"],
     pronouns: ["pronouns", "gender pronouns", "preferred pronouns"],
     skills: ["skills", "technologies", "tech stack"],
-    work_authorization: ["work authorization", "visa", "citizenship", "eligible to work", "legally authorized"],
+    work_authorization: [
+      "work authorization",
+      "legally authorized",
+      "legally authorized to work",
+      "authorized to work",
+      "eligible to work",
+      "right to work",
+      "permit to work",
+      "citizenship",
+      "permanent resident",
+      "work permit"
+    ],
     requires_sponsorship: [
       "require sponsorship",
       "sponsorship for employment",
-      "h-1b",
-      "tn visa",
-      "work authorization",
-      "employment authorization",
       "visa sponsorship",
+      "h-1b",
+      "h1b",
+      "tn visa",
+      "employment sponsorship",
+      "immigration sponsorship",
       "now or in the future require",
       "need sponsorship",
-      "sponsorship now"
+      "sponsorship now",
+      "will you need",
+      "require a visa"
     ],
     willing_to_relocate: [
       "willing to relocate",
@@ -141,7 +155,24 @@
       "power bi"
     ],
     cover_letter: ["cover letter", "why join", "why us", "motivation"],
-    resume_text: ["resume", "cv", "experience summary", "about"]
+    resume_text: ["resume", "cv", "experience summary", "about"],
+    years_of_experience: [
+      "years of experience",
+      "years experience",
+      "how many years",
+      "total experience",
+      "professional experience",
+      "yoe"
+    ],
+    education_level: [
+      "education level",
+      "highest education",
+      "highest degree",
+      "degree level",
+      "level of education",
+      "educational attainment",
+      "academic background"
+    ]
   };
 
   function splitFullName(fullName) {
@@ -250,7 +281,10 @@
 
   function tokenScore(metaText, token) {
     if (!metaText || !token) return 0;
-    if (metaText.includes(token)) return 1;
+    if (metaText.includes(token)) {
+      const words = token.trim().split(/\s+/).length;
+      return Math.min(1, 0.9 + Math.min(words, 5) * 0.02);
+    }
     return similarity(metaText, token);
   }
 
@@ -296,6 +330,20 @@
     if (key === "data_viz_years") return String(profile.data_viz_years || "").trim();
     if (key === "requires_sponsorship") return yesNoBinary(profile.requires_sponsorship);
     if (key === "willing_to_relocate") return yesNoBinary(profile.willing_to_relocate);
+    if (key === "years_of_experience") {
+      const exp = profile.experience;
+      if (Array.isArray(exp) && exp.length) {
+        const computed = computeYearsOfExperience(exp);
+        if (computed) return computed;
+      }
+      return String(profile.years_of_experience || "").trim();
+    }
+    if (key === "education_level") {
+      const edu = Array.isArray(profile.education) ? profile.education : [];
+      const last = edu[edu.length - 1];
+      if (!last) return "";
+      return [last.degree, last.fieldOfStudy].filter(Boolean).join(" ").trim();
+    }
     if (key === "first_name") return String(profile.first_name || "").trim() || splitFullName(profile.full_name).first;
     if (key === "last_name") return String(profile.last_name || "").trim() || splitFullName(profile.full_name).last;
     if (key === "full_name") return composedFullName(profile);
@@ -322,6 +370,23 @@
       if (value) return { key: "full_name", value: String(value), confidence: 1 };
     }
 
+    // Sponsorship vs work authorization: overlapping vocabulary on real forms.
+    if (
+      /\b(require|need|will you).{0,50}sponsor/i.test(metaText) ||
+      /\bvisa sponsorship|sponsorship for employment|immigration sponsorship|employment sponsorship/i.test(metaText) ||
+      /\bh[- ]?1b|h1b\b/i.test(metaText)
+    ) {
+      const value = resolveValue("requires_sponsorship", profile, metaText);
+      if (value) return { key: "requires_sponsorship", value: String(value), confidence: 0.98 };
+    }
+    if (
+      /\b(legally )?authorized to work|eligible to work|right to work|work authorization status|permit to work/i.test(metaText) &&
+      !/\bsponsor/i.test(metaText)
+    ) {
+      const value = resolveValue("work_authorization", profile, metaText);
+      if (value) return { key: "work_authorization", value: String(value), confidence: 0.98 };
+    }
+
     const candidates = [];
 
     Object.keys(TOKEN_MAP).forEach((key) => {
@@ -332,6 +397,14 @@
       // Penalise full_name when the field clearly belongs to first/last
       if (key === "full_name" && /\bfirst name\b|\bgiven name\b|\blast name\b|\bsurname\b|\bfamily name\b/.test(metaText)) {
         score -= 0.35;
+      }
+      // Penalise sponsorship when the question is clearly work-authorization-only
+      if (
+        key === "requires_sponsorship" &&
+        /\b(authorized to work|eligible to work|right to work)\b/i.test(metaText) &&
+        !/\bsponsor/i.test(metaText)
+      ) {
+        score -= 0.45;
       }
 
       const keyThreshold =

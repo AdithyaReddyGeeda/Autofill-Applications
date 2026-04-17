@@ -88,6 +88,31 @@
    * Log a rich, grouped diagnostic block for a single dropdown fill attempt.
    * Only produces output when debug mode is on.
    */
+  /** One-line per-field debug for the main fill + progressive rescan (when dev mode is on). */
+  function logFillMatchDebug({
+    label,
+    fieldType,
+    profileKey,
+    value,
+    confidence,
+    selectorSummary,
+    outcome,
+    reason
+  }) {
+    if (!isDebug()) return;
+    const conf =
+      confidence != null && !Number.isNaN(Number(confidence)) ? Number(confidence).toFixed(3) : "—";
+    console.groupCollapsed(`[AutoFill Field] ${profileKey} @ ${conf} — ${outcome}`);
+    console.log("Field label        :", label || "(none)");
+    console.log("Detected field type:", fieldType);
+    console.log("Matched profile key:", profileKey);
+    console.log("Desired value      :", String(value ?? "").slice(0, 200));
+    console.log("Match confidence   :", conf);
+    console.log("Element summary    :", selectorSummary);
+    if (reason) console.log("Context            :", reason);
+    console.groupEnd();
+  }
+
   function logDropdownAttempt({ label, wanted, fieldType, triggerEl, scored, outcome, reason }) {
     if (!isDebug()) return;
     const icon = outcome === "picked" ? "\u2705" : "\u274C";
@@ -1687,6 +1712,70 @@
 
   const MAX_RESCAN_PASSES = 4;
   const WORKDAY_RESCAN_DELAY_MS = 900;
+  const PROGRESSIVE_RESCAN_PASSES = 3;
+  const PROGRESSIVE_RESCAN_DELAY_MS = 850;
+
+  async function progressiveRescanFill(profile, preview, threshold, filledElements) {
+    if (!isJobApplicationHost()) return { filled: 0, keys: [] };
+    let totalFilled = 0;
+    const matchedKeys = [];
+    for (let pass = 0; pass < PROGRESSIVE_RESCAN_PASSES; pass += 1) {
+      await sleep(pass === 0 ? 400 : PROGRESSIVE_RESCAN_DELAY_MS);
+      const batch = window.JobAutofillDetector.detectAndMatch(profile, {
+        threshold,
+        excludeElements: filledElements
+      });
+      if (!batch.length) break;
+      if (isDebug()) {
+        console.log(`[AutoFill] Progressive rescan — pass ${pass + 1}: ${batch.length} newly visible field(s)`);
+      }
+      let filledThisPass = 0;
+      for (const m of batch) {
+        const mergedText = `${m.meta.name} ${m.meta.id} ${m.meta.placeholder} ${m.meta.label} ${m.meta.nearText}`;
+        if (SENSITIVE_PATTERNS.test(mergedText)) continue;
+        try {
+          const value = resolveMatchValue(m);
+          logFillMatchDebug({
+            label: m.meta.label || m.meta.ariaLabel || "",
+            fieldType: fieldTypeLabel(m.element),
+            profileKey: m.key,
+            value,
+            confidence: m.confidence,
+            selectorSummary: elSummary(m.element),
+            outcome: "attempt",
+            reason: `progressive rescan pass ${pass + 1}`
+          });
+          const raw = await applyFieldValue(m.element, value, m.key);
+          if (isAriaCustomRadio(m.element) && raw == null) continue;
+          let previous;
+          let filledElement = m.element;
+          if (raw && typeof raw === "object" && raw.__ariaRadio) {
+            previous = raw.previous;
+            filledElement = raw.target || m.element;
+          } else {
+            previous = raw;
+          }
+          const synthetic = usesSyntheticFill(m.element, m.key);
+          STATE.lastFilled.push({
+            element: filledElement,
+            previous,
+            synthetic,
+            ariaRadio: Boolean(raw && raw.__ariaRadio)
+          });
+          filledElements.add(m.element);
+          filledElements.add(filledElement);
+          highlightField(filledElement);
+          totalFilled += 1;
+          filledThisPass += 1;
+          matchedKeys.push(m.key);
+        } catch (err) {
+          if (isDebug()) console.error("[AutoFill] Progressive rescan error:", err);
+        }
+      }
+      if (filledThisPass === 0) break;
+    }
+    return { filled: totalFilled, keys: matchedKeys };
+  }
 
   function collectWorkdayFormFields() {
     const fields = [];
@@ -1789,7 +1878,7 @@
     return false;
   }
 
-  async function workdayFillPass(profile, preview) {
+  async function workdayFillPass(profile, preview, filledElements) {
     const siteHandlers = window.JobAutofillSiteHandlers;
     if (!siteHandlers?.isWorkday?.()) return { filled: 0, fieldKeys: [] };
 
@@ -1797,10 +1886,10 @@
 
     let totalFilled = 0;
     const filledKeys = [];
-    const filledElements = new Set();
+    const wdSeen = filledElements || new WeakSet();
 
     for (let pass = 0; pass <= MAX_RESCAN_PASSES; pass++) {
-      const fields = collectWorkdayFormFields().filter((f) => !filledElements.has(f.element));
+      const fields = collectWorkdayFormFields().filter((f) => !wdSeen.has(f.element));
       if (!fields.length) break;
 
       if (isDebug() && pass > 0) {
@@ -1830,7 +1919,7 @@
           }
 
           await applyFieldValue(element, fillValue, key);
-          filledElements.add(element);
+          wdSeen.add(element);
           totalFilled++;
           filledThisPass++;
           filledKeys.push(key);
@@ -1898,22 +1987,34 @@
     let filledCount = 0;
     let skippedCount = 0;
     const matchedKeys = [];
+    const filledElements = new WeakSet();
 
     // Run Workday-specific fill pass first for better coverage of Workday
     // custom controls and dependent questions that appear after filling.
     const isWorkday = window.JobAutofillSiteHandlers?.isWorkday?.() || false;
     if (isWorkday) {
-      const wdResult = await workdayFillPass(enrichedProfile, preview);
+      const wdResult = await workdayFillPass(enrichedProfile, preview, filledElements);
       filledCount += wdResult.filled;
       matchedKeys.push(...wdResult.fieldKeys);
     }
 
     for (let index = 0; index < matches.length; index += 1) {
       const m = matches[index];
+      if (filledElements.has(m.element)) continue;
       const mergedText = `${m.meta.name} ${m.meta.id} ${m.meta.placeholder} ${m.meta.label} ${m.meta.nearText}`;
       if (SENSITIVE_PATTERNS.test(mergedText)) continue;
       try {
         const value = preview.overrides?.[String(index)] ?? resolveMatchValue(m);
+        logFillMatchDebug({
+          label: m.meta.label || m.meta.ariaLabel || "",
+          fieldType: fieldTypeLabel(m.element),
+          profileKey: m.key,
+          value,
+          confidence: m.confidence,
+          selectorSummary: elSummary(m.element),
+          outcome: "attempt",
+          reason: "primary fill pass"
+        });
         if (isDebug()) {
           console.log(
             `[AutoFill] #${index} key="${m.key}" value="${String(value).slice(0, 60)}"`,
@@ -1938,6 +2039,8 @@
           synthetic,
           ariaRadio: Boolean(raw && raw.__ariaRadio)
         });
+        filledElements.add(m.element);
+        filledElements.add(filledElement);
         highlightField(filledElement);
         filledCount += 1;
         matchedKeys.push(m.key);
@@ -1946,14 +2049,18 @@
       }
     }
 
-    // On Workday, do a final rescan for dependent questions that appeared
-    // after the main fill loop.
+    // Workday: final pass for dependent questions after generic fill.
     if (isWorkday) {
       await sleep(WORKDAY_RESCAN_DELAY_MS);
-      const postResult = await workdayFillPass(enrichedProfile, preview);
+      const postResult = await workdayFillPass(enrichedProfile, preview, filledElements);
       filledCount += postResult.filled;
       matchedKeys.push(...postResult.fieldKeys);
     }
+
+    // Greenhouse / Indeed / LinkedIn / Workday / etc.: newly revealed fields
+    const progressive = await progressiveRescanFill(enrichedProfile, preview, threshold, filledElements);
+    filledCount += progressive.filled;
+    matchedKeys.push(...progressive.keys);
 
     // Report structured warnings for any dropdowns/radios that were skipped.
     const warnings = drainFillWarnings();

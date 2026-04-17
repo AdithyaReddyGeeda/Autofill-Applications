@@ -246,7 +246,11 @@
 
   function detectAndMatch(profile, options = {}) {
     const threshold = Number(options.threshold ?? 0.38);
-    const fields = queryCandidateFields();
+    const exclude =
+      options.excludeElements instanceof Set || options.excludeElements instanceof WeakSet
+        ? options.excludeElements
+        : null;
+    const fields = queryCandidateFields().filter((el) => !exclude || !exclude.has(el));
     const matches = fields
       .map((el) => {
         const meta = extractMetadata(el);
